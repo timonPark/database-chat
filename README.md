@@ -100,13 +100,25 @@ npm start
 
 ## 지원 조합 현황
 
+프로젝트 생성 시 DB 연동 방식으로 **"Docker로 새 DB 생성"** 과 **"기존 DB 연동"** 중 하나를 고를 수 있습니다. 검증 상태가 다르니 아래 표를 참고하세요.
+
+### Docker 새 DB 모드 (검증 완료)
+
 | | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Claude** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Gemini** | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
 | **Codex**  | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
 
-✅ 사용 가능 · 🔜 준비 중
+### 기존 DB 연동 모드 (미검증)
+
+템플릿 자체는 생성되지만, 실제 원격/기존 DB 를 붙여서 end-to-end 로 확인한 사례는 아직 없습니다. 사용 중 이슈가 있으면 [이슈](https://github.com/timonPark/database-chat/issues)로 남겨주세요.
+
+| | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Claude** | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+
+✅ 검증 완료 · ⚠️ 템플릿 생성만 확인 (실환경 미검증) · 🔜 준비 중
 
 ### 샘플 데이터 (`npm run seed`)
 

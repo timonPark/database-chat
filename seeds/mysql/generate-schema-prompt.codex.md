@@ -18,11 +18,15 @@ Last updated: `{{TODAY}}`
 ```json
 {
   "index": "complete markdown content for index.md",
-  "mapping": "complete markdown content for table-mapping.md"
+  "mapping": "complete markdown content for table-mapping.md",
+  "tables": {
+    "table_name": "complete markdown content for tables/table_name.md"
+  }
 }
 ```
 
-Both values must be strings. Escape newlines as `\n` and double quotes as needed so the entire response is parseable JSON.
+The `index` and `mapping` values must be strings. Escape newlines as `\n` and double quotes as needed so the entire response is parseable JSON.
+The `tables` value must contain one key for every table. Each key must be the exact table name and each value must be the complete Markdown content for that table's detail file.
 
 ## Input format
 
@@ -95,3 +99,25 @@ Create Korean markdown with this structure:
 - Prefer business-relevant columns and primary/foreign key columns as `주요 컬럼`.
 - Omit sensitive columns such as `password`, `pass_hash`, `passwd`, `pwd`, and `secret`.
 - Keep table and column names exactly as provided.
+
+## Table detail requirements
+
+For every table, add a `tables` entry using this Markdown structure:
+
+```markdown
+# table_name
+
+> **database**: `{{DB_DATABASE}}` | **건수**: 123건
+
+## 컬럼 목록
+
+| 컬럼명 | 타입 | Null | Key | 설명 |
+|--------|------|------|-----|------|
+| `col_name` | varchar(45) | NO | PRI | 한글 설명 |
+
+## 관련 테이블
+
+- 관련 외래키 관계 서술
+```
+
+Include all columns, omit sensitive columns such as `password`, `pass_hash`, `passwd`, `pwd`, and `secret`, and preserve the exact table name in the heading and file key.

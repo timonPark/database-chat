@@ -39,6 +39,7 @@ const AVAILABLE_COMBOS = new Set([
   'claude-oracle',
   'claude-mssql',
   'codex-mongodb',
+  'codex-mysql',
 ]);
 
 // ── 유틸 ─────────────────────────────────────────────────────────────────────

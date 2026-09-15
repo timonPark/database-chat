@@ -39,6 +39,7 @@ const AVAILABLE_COMBOS = new Set([
   'claude-oracle',
   'claude-mssql',
   'codex-mongodb',
+  'codex-mysql',
 ]);
 
 // ── 유틸 ─────────────────────────────────────────────────────────────────────
@@ -260,6 +261,7 @@ function buildGenerateSchemaSh(database: string, provider: string): string {
   const entityTag   = isMongo ? 'COLLECTION' : 'TABLE';
   const entityLabel = isMongo ? '컬렉션' : '테이블';
   const entityDir   = isMongo ? 'collections' : 'tables';
+  const entityKey   = isMongo ? 'collections' : 'tables';
 
   // 공통 헤더: TS로 스키마 추출 → Python으로 프롬프트에 주입
   const header = `#!/usr/bin/env bash
@@ -352,25 +354,25 @@ if not match:
 result = json.loads(match.group())
 with open('index.md', 'w') as f: f.write(result['index'])
 with open('${mappingFile}', 'w') as f: f.write(result['mapping'])
-collections = result.get('collections', {})
-if not isinstance(collections, dict):
-    print('오류: collections 응답 형식이 올바르지 않습니다.', file=sys.stderr)
+entities = result.get('${entityKey}', {})
+if not isinstance(entities, dict):
+    print('오류: ${entityKey} 응답 형식이 올바르지 않습니다.', file=sys.stderr)
     sys.exit(1)
 import os
 os.makedirs('${entityDir}', exist_ok=True)
-for index, (name, content) in enumerate(collections.items(), 1):
+for index, (name, content) in enumerate(entities.items(), 1):
     if not isinstance(name, str) or not isinstance(content, str):
-        print('오류: 컬렉션 상세 정보 형식이 올바르지 않습니다.', file=sys.stderr)
+        print('오류: ${entityLabel} 상세 정보 형식이 올바르지 않습니다.', file=sys.stderr)
         sys.exit(1)
     if not name or '/' in name or chr(92) in name or name in {'.', '..'}:
-        print(f'오류: 허용되지 않는 컬렉션명입니다: {name}', file=sys.stderr)
+        print(f'오류: 허용되지 않는 ${entityLabel}명입니다: {name}', file=sys.stderr)
         sys.exit(1)
     with open(os.path.join('${entityDir}', f'{name}.md'), 'w') as f:
         f.write(content)
-    print(f'      [{index}/{len(collections)}] {name}.md 생성 완료', flush=True)
+    print(f'      [{index}/{len(entities)}] {name}.md 생성 완료', flush=True)
 print('  ✔ index.md 생성 완료')
 print('  ✔ ${mappingFile} 생성 완료')
-print(f'  ✔ ${entityDir}/ 생성 완료 ({len(collections)}개)')
+print(f'  ✔ ${entityDir}/ 생성 완료 ({len(entities)}개)')
 PYTHON`;
   } else {
     llmCall = `echo "[3/3] Codex로 인덱스 생성 중..."
@@ -421,25 +423,25 @@ if not match:
 result = json.loads(match.group())
 with open('index.md', 'w') as f: f.write(result['index'])
 with open('${mappingFile}', 'w') as f: f.write(result['mapping'])
-collections = result.get('collections', {})
-if not isinstance(collections, dict):
-    print('오류: collections 응답 형식이 올바르지 않습니다.', file=sys.stderr)
+entities = result.get('${entityKey}', {})
+if not isinstance(entities, dict):
+    print('오류: ${entityKey} 응답 형식이 올바르지 않습니다.', file=sys.stderr)
     sys.exit(1)
 import os
 os.makedirs('${entityDir}', exist_ok=True)
-for index, (name, content) in enumerate(collections.items(), 1):
+for index, (name, content) in enumerate(entities.items(), 1):
     if not isinstance(name, str) or not isinstance(content, str):
-        print('오류: 컬렉션 상세 정보 형식이 올바르지 않습니다.', file=sys.stderr)
+        print('오류: ${entityLabel} 상세 정보 형식이 올바르지 않습니다.', file=sys.stderr)
         sys.exit(1)
     if not name or '/' in name or chr(92) in name or name in {'.', '..'}:
-        print(f'오류: 허용되지 않는 컬렉션명입니다: {name}', file=sys.stderr)
+        print(f'오류: 허용되지 않는 ${entityLabel}명입니다: {name}', file=sys.stderr)
         sys.exit(1)
     with open(os.path.join('${entityDir}', f'{name}.md'), 'w') as f:
         f.write(content)
-    print(f'      [{index}/{len(collections)}] {name}.md 생성 완료', flush=True)
+    print(f'      [{index}/{len(entities)}] {name}.md 생성 완료', flush=True)
 print('  ✔ index.md 생성 완료')
 print('  ✔ ${mappingFile} 생성 완료')
-print(f'  ✔ ${entityDir}/ 생성 완료 ({len(collections)}개)')
+print(f'  ✔ ${entityDir}/ 생성 완료 ({len(entities)}개)')
 PYTHON`;
   }
 

@@ -38,6 +38,7 @@ const AVAILABLE_COMBOS = new Set([
   'claude-postgresql',
   'claude-oracle',
   'claude-mssql',
+  'codex-mongodb',
 ]);
 
 // ── 유틸 ─────────────────────────────────────────────────────────────────────
@@ -331,23 +332,15 @@ echo ""
 [ -d "${entityDir}" ]   && echo "  ✔ ${entityDir}/ 생성 완료 (\${_DONE}개)"`;
 
 
-  } else {
-    const apiBlock = provider === 'gemini'
-      ? `api_key = os.environ['GEMINI_API_KEY']
+  } else if (provider === 'gemini') {
+    const apiBlock = `api_key = os.environ['GEMINI_API_KEY']
 model   = os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash')
 url     = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}'
 body    = json.dumps({'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'maxOutputTokens': 8192}}).encode()
 req     = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'})
-text    = json.loads(urllib.request.urlopen(req).read())['candidates'][0]['content']['parts'][0]['text']`
-      : `api_key = os.environ['OPENAI_API_KEY']
-model   = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
-url     = 'https://api.openai.com/v1/chat/completions'
-body    = json.dumps({'model': model, 'max_tokens': 8192, 'messages': [{'role': 'user', 'content': prompt}]}).encode()
-req     = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'})
-text    = json.loads(urllib.request.urlopen(req).read())['choices'][0]['message']['content']`;
+text    = json.loads(urllib.request.urlopen(req).read())['candidates'][0]['content']['parts'][0]['text']`;
 
-    const label = provider === 'gemini' ? 'Gemini' : 'Codex';
-    llmCall = `echo "[3/3] ${label}로 인덱스 생성 중..."
+    llmCall = `echo "[3/3] Gemini로 인덱스 생성 중..."
 python3 - << 'PYTHON'
 import os, json, urllib.request, re, sys
 with open('/tmp/_schema_prompt.txt') as f:
@@ -359,8 +352,94 @@ if not match:
 result = json.loads(match.group())
 with open('index.md', 'w') as f: f.write(result['index'])
 with open('${mappingFile}', 'w') as f: f.write(result['mapping'])
+collections = result.get('collections', {})
+if not isinstance(collections, dict):
+    print('오류: collections 응답 형식이 올바르지 않습니다.', file=sys.stderr)
+    sys.exit(1)
+import os
+os.makedirs('${entityDir}', exist_ok=True)
+for index, (name, content) in enumerate(collections.items(), 1):
+    if not isinstance(name, str) or not isinstance(content, str):
+        print('오류: 컬렉션 상세 정보 형식이 올바르지 않습니다.', file=sys.stderr)
+        sys.exit(1)
+    if not name or '/' in name or chr(92) in name or name in {'.', '..'}:
+        print(f'오류: 허용되지 않는 컬렉션명입니다: {name}', file=sys.stderr)
+        sys.exit(1)
+    with open(os.path.join('${entityDir}', f'{name}.md'), 'w') as f:
+        f.write(content)
+    print(f'      [{index}/{len(collections)}] {name}.md 생성 완료', flush=True)
 print('  ✔ index.md 생성 완료')
 print('  ✔ ${mappingFile} 생성 완료')
+print(f'  ✔ ${entityDir}/ 생성 완료 ({len(collections)}개)')
+PYTHON`;
+  } else {
+    llmCall = `echo "[3/3] Codex로 인덱스 생성 중..."
+CODEX_BIN="\${CODEX_CLI_PATH:-}"
+if [ -z "\$CODEX_BIN" ]; then
+  if command -v codex >/dev/null 2>&1; then
+    CODEX_BIN="codex"
+  elif [ -x "/Applications/ChatGPT.app/Contents/Resources/codex" ]; then
+    CODEX_BIN="/Applications/ChatGPT.app/Contents/Resources/codex"
+  fi
+fi
+
+if [ -z "\$CODEX_BIN" ]; then
+  echo "오류: Codex CLI를 찾을 수 없습니다."
+  echo "      npm install -g @openai/codex 로 설치하거나 CODEX_CLI_PATH를 설정하세요."
+  exit 1
+fi
+
+CODEX_MODEL_VALUE="\${CODEX_MODEL:-gpt-5.6-luna}"
+if [ -n "\$CODEX_MODEL_VALUE" ]; then
+  "\$CODEX_BIN" exec \\
+    --skip-git-repo-check \\
+    --sandbox workspace-write \\
+    --output-last-message /tmp/_schema_codex.out \\
+    --model "\$CODEX_MODEL_VALUE" \\
+    "$(cat /tmp/_schema_prompt.txt)" > /tmp/_schema_codex.log 2>&1
+else
+  "\$CODEX_BIN" exec \\
+    --skip-git-repo-check \\
+    --sandbox workspace-write \\
+    --output-last-message /tmp/_schema_codex.out \\
+    "$(cat /tmp/_schema_prompt.txt)" > /tmp/_schema_codex.log 2>&1
+fi
+
+python3 - << 'PYTHON'
+import json, re, sys
+try:
+    with open('/tmp/_schema_codex.out') as f:
+        text = f.read()
+except FileNotFoundError:
+    with open('/tmp/_schema_codex.log') as f:
+        text = f.read()
+match = re.search(r'\\{[\\s\\S]*\\}', text)
+if not match:
+    print('오류: JSON 응답 파싱 실패', file=sys.stderr)
+    print(text, file=sys.stderr)
+    sys.exit(1)
+result = json.loads(match.group())
+with open('index.md', 'w') as f: f.write(result['index'])
+with open('${mappingFile}', 'w') as f: f.write(result['mapping'])
+collections = result.get('collections', {})
+if not isinstance(collections, dict):
+    print('오류: collections 응답 형식이 올바르지 않습니다.', file=sys.stderr)
+    sys.exit(1)
+import os
+os.makedirs('${entityDir}', exist_ok=True)
+for index, (name, content) in enumerate(collections.items(), 1):
+    if not isinstance(name, str) or not isinstance(content, str):
+        print('오류: 컬렉션 상세 정보 형식이 올바르지 않습니다.', file=sys.stderr)
+        sys.exit(1)
+    if not name or '/' in name or chr(92) in name or name in {'.', '..'}:
+        print(f'오류: 허용되지 않는 컬렉션명입니다: {name}', file=sys.stderr)
+        sys.exit(1)
+    with open(os.path.join('${entityDir}', f'{name}.md'), 'w') as f:
+        f.write(content)
+    print(f'      [{index}/{len(collections)}] {name}.md 생성 완료', flush=True)
+print('  ✔ index.md 생성 완료')
+print('  ✔ ${mappingFile} 생성 완료')
+print(f'  ✔ ${entityDir}/ 생성 완료 ({len(collections)}개)')
 PYTHON`;
   }
 
@@ -464,7 +543,10 @@ ${pmCmd} run schema
       ['CLAUDE_MAX_TURNS', '최대 턴 수',     '10'],
     ] as [string, string, string][] : []),
     ...(provider === 'gemini' ? [['GEMINI_API_KEY', 'Gemini API 키', '—']] as [string, string, string][] : []),
-    ...(provider === 'codex'  ? [['OPENAI_API_KEY', 'OpenAI API 키', '—']] as [string, string, string][] : []),
+    ...(provider === 'codex' ? [
+      ['CODEX_MODEL', 'Codex 모델', 'gpt-5.6-luna'],
+      ['CODEX_CLI_PATH', 'Codex CLI 경로', '/Applications/ChatGPT.app/Contents/Resources/codex'],
+    ] as [string, string, string][] : []),
   ];
   const envTable = envRows.map(([k, d, v]) => `| \`${k}\` | ${d} | \`${v}\` |`).join('\n');
 
@@ -592,14 +674,14 @@ else
   echo -e "\${GREEN}[✔] GEMINI_API_KEY 확인\${NC}"
 fi`
     : `echo ""
-echo "  [2/5] OPENAI_API_KEY 확인..."
-ENV_KEY=$(grep -v '^#' .env 2>/dev/null | grep 'OPENAI_API_KEY' | cut -d= -f2 | tr -d ' \\r')
-if [ -z "\${OPENAI_API_KEY:-}" ] && [ -z "\${ENV_KEY:-}" ]; then
-  echo -e "\${YELLOW}[!] OPENAI_API_KEY가 설정되어 있지 않습니다.\${NC}"
-  echo "      .env 파일에 OPENAI_API_KEY=<키값> 을 추가하세요."
-  echo "      API 키 발급: https://platform.openai.com/api-keys"
+echo "  [2/5] Codex CLI 확인..."
+if ! command -v codex &>/dev/null; then
+  echo -e "\${YELLOW}[!] Codex CLI가 설치되어 있지 않습니다.\${NC}"
+  echo "      npm install -g @openai/codex 로 설치하거나"
+  echo "      codex login 으로 구독 계정 로그인을 완료하세요."
 else
-  echo -e "\${GREEN}[✔] OPENAI_API_KEY 확인\${NC}"
+  CODEX_VER=$(codex --version 2>/dev/null | head -1 || echo "확인 불가")
+  echo -e "\${GREEN}[✔] Codex CLI \${CODEX_VER}\${NC}"
 fi`;
 
   // .env에 추가할 provider 환경변수 안내
@@ -607,7 +689,7 @@ fi`;
     ? ''
     : provider === 'gemini'
     ? '  GEMINI_API_KEY=<Gemini API 키>'
-    : '  OPENAI_API_KEY=<OpenAI API 키>';
+    : '  CODEX_MODEL=gpt-5.6-luna';
 
   // DB 환경변수 안내
   const dbEnvHint = database === 'oracle'
@@ -757,21 +839,21 @@ if %ERRORLEVEL% neq 0 (
 ) else (
   echo [v] GEMINI_API_KEY 확인
 )`
-    : `echo   [2/5] OPENAI_API_KEY 확인...
-findstr /i "OPENAI_API_KEY=" .env >nul 2>&1
+    : `echo   [2/5] Codex CLI 확인...
+where codex >nul 2>&1
 if %ERRORLEVEL% neq 0 (
-  echo [!] OPENAI_API_KEY 가 .env 에 설정되어 있지 않습니다.
-  echo     .env 파일에 OPENAI_API_KEY=^<키값^> 을 추가하세요.
-  echo     API 키 발급: https://platform.openai.com/api-keys
+  echo [!] Codex CLI 가 설치되어 있지 않습니다.
+  echo     npm install -g @openai/codex 로 설치하거나
+  echo     codex login 으로 구독 계정 로그인을 완료하세요.
 ) else (
-  echo [v] OPENAI_API_KEY 확인
+  for /f "tokens=*" %%v in ('codex --version 2^>nul') do echo [v] Codex CLI %%v
 )`;
 
   const providerEnvHint = provider === 'claude'
     ? ''
     : provider === 'gemini'
     ? `  echo   GEMINI_API_KEY=^<Gemini API 키^>`
-    : `  echo   OPENAI_API_KEY=^<OpenAI API 키^>`;
+    : `  echo   CODEX_MODEL=gpt-5.6-luna`;
 
   const dbEnvHint = database === 'oracle'
     ? `  echo   DB_SERVICE_NAME=^<Oracle 서비스명^>`
@@ -991,11 +1073,6 @@ async function runAutoSetup(
   database: string,
   withSeed: boolean,
 ): Promise<void> {
-  if (provider !== 'claude') {
-    console.log(pc.yellow(`\n⚠  ${provider} auto-setup은 아직 지원되지 않습니다. Next steps를 직접 실행해주세요.`));
-    return;
-  }
-
   const spinner = p.spinner();
 
   type Step = { label: string; fn: () => void; stream?: boolean };
@@ -1005,8 +1082,30 @@ async function runAutoSetup(
     steps.push({
       label: 'Docker 컨테이너 기동',
       fn: () => {
-        spawnSync('docker', ['compose', '-f', 'docker/docker-compose.yml', 'up', '-d'],
+        const result = spawnSync('docker', ['compose', '-f', 'docker/docker-compose.yml', 'up', '-d'],
           { cwd: targetDir, stdio: 'inherit' });
+        if (result.status !== 0) {
+          throw new Error('Docker 컨테이너 기동 실패');
+        }
+      },
+      stream: true,
+    });
+  }
+
+  if (provider === 'claude' || provider === 'codex') {
+    steps.push({
+      label: `${provider === 'claude' ? 'Claude' : 'Codex'} CLI 확인`,
+      fn: () => {
+        const command = provider === 'claude'
+          ? 'claude'
+          : process.env.CODEX_CLI_PATH
+            ?? (existsSync('/Applications/ChatGPT.app/Contents/Resources/codex')
+              ? '/Applications/ChatGPT.app/Contents/Resources/codex'
+              : 'codex');
+        const result = spawnSync(command, ['--version'], { cwd: targetDir, stdio: 'inherit' });
+        if (result.status !== 0) {
+          throw new Error(`${provider === 'claude' ? 'Claude' : 'Codex'} CLI를 찾을 수 없습니다.`);
+        }
       },
       stream: true,
     });
@@ -1030,6 +1129,7 @@ async function runAutoSetup(
             // [compose 패턴, .env 패턴, .env 키]
             [/MONGO_INITDB_ROOT_USERNAME:\s*(\S+)/, /^DB_USER_NAME=.*/m, 'DB_USER_NAME'],
             [/MONGO_INITDB_ROOT_PASSWORD:\s*(\S+)/, /^DB_USER_PASSWORD=.*/m, 'DB_USER_PASSWORD'],
+            [/MONGO_INITDB_DATABASE:\s*(\S+)/, /^DB_DATABASE=.*/m, 'DB_DATABASE'],
             [/MYSQL_ROOT_PASSWORD:\s*(\S+)|MYSQL_PASSWORD:\s*(\S+)/, /^DB_USER_PASSWORD=.*/m, 'DB_USER_PASSWORD'],
             [/MYSQL_USER:\s*(\S+)/, /^DB_USER_NAME=.*/m, 'DB_USER_NAME'],
             [/MYSQL_DATABASE:\s*(\S+)/, /^DB_DATABASE=.*/m, 'DB_DATABASE'],
@@ -1060,7 +1160,10 @@ async function runAutoSetup(
     steps.push({
       label: '샘플 데이터 마이그레이션 (seed.sh)',
       fn: () => {
-        spawnSync(pm, ['run', 'seed'], { cwd: targetDir, stdio: 'inherit' });
+        const result = spawnSync(pm, ['run', 'seed'], { cwd: targetDir, stdio: 'inherit' });
+        if (result.status !== 0) {
+          throw new Error('샘플 데이터 마이그레이션 실패');
+        }
       },
       stream: true,
     });
@@ -1069,7 +1172,10 @@ async function runAutoSetup(
   steps.push({
     label: 'DB 스키마 인덱스 생성 (schema)',
     fn: () => {
-      spawnSync(pm, ['run', 'schema'], { cwd: targetDir, stdio: 'inherit' });
+      const result = spawnSync(pm, ['run', 'schema'], { cwd: targetDir, stdio: 'inherit' });
+      if (result.status !== 0) {
+        throw new Error('DB 스키마 인덱스 생성 실패');
+      }
     },
     stream: true,
   });
@@ -1084,16 +1190,24 @@ async function runAutoSetup(
       console.log(pc.dim(`\n  ${prefix} ${label}...`));
       try {
         fn();
-      } catch {
-        console.log(pc.yellow(`  ${prefix} 오류 발생 (계속 진행)`));
+      } catch (err) {
+        console.log(pc.red(`  ${prefix} ${label} 실패`));
+        console.log(pc.yellow(`  ${(err as Error).message}`));
+        console.log('');
+        console.log(pc.yellow('  자동 설정을 중단합니다. 위 오류를 해결한 뒤 Next steps를 다시 실행하세요.'));
+        return;
       }
     } else {
       spinner.start(`${prefix} ${label}...`);
       try {
         fn();
         spinner.stop(`  ${prefix} ${label} 완료`);
-      } catch {
-        spinner.stop(pc.yellow(`  ${prefix} ${label} 실패`));
+      } catch (err) {
+        spinner.stop(pc.red(`  ${prefix} ${label} 실패`));
+        console.log(pc.yellow(`  ${(err as Error).message}`));
+        console.log('');
+        console.log(pc.yellow('  자동 설정을 중단합니다. 위 오류를 해결한 뒤 Next steps를 다시 실행하세요.'));
+        return;
       }
     }
   }

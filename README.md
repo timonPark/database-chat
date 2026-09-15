@@ -1,52 +1,54 @@
 # create-database-chat
 
-자연어로 데이터베이스를 조회하는 채팅 앱을 한 줄 명령어로 생성하는 CLI 스캐폴딩 도구.
+> **Language**: **English** · [한국어](./README.ko.md)
 
-LLM 제공자(Claude / Gemini / Codex)와 데이터베이스(MongoDB / MySQL / PostgreSQL / Oracle / MSSQL)를 선택하면 바로 실행 가능한 프로젝트를 생성합니다.
+A CLI scaffolding tool that generates natural-language database chat apps with a single command.
+
+Pick an LLM provider (Claude / Gemini / Codex) and a database (MongoDB / MySQL / PostgreSQL / Oracle / MSSQL), and you get a ready-to-run project.
 
 ```
 $ npx create-database-chat my-app
 ```
 
 - Repo: <https://github.com/timonPark/database-chat>
-- 라이선스: MIT
+- License: MIT
 
 ---
 
-## 동작 방식
+## How it works
 
 ```
-사용자 자연어 입력
+User natural-language input
        ↓
-   LLM (Claude 등)
-       ↓  curl로 내부 API 호출
-  Express 서버
+   LLM (Claude, etc.)
+       ↓  calls internal API via curl
+  Express server
        ↓
-   데이터베이스
+   Database
        ↓
-  HTML 채팅 UI 출력
+  HTML chat UI
 ```
 
-LLM은 직접 DB에 접근하지 않고 서버 내부 HTTP 엔드포인트(`/db-query`, `/db-aggregate`)에 curl로 요청합니다. DB 자격증명이 LLM에 노출되지 않으며, 커넥션 풀도 서버가 관리합니다.
+The LLM never touches the database directly. It calls internal HTTP endpoints (`/db-query`, `/db-aggregate`) on the Express server via curl. DB credentials stay on the server, and the connection pool is server-managed.
 
 ---
 
-## 빠른 시작
+## Quick start
 
-### 요구사항
+### Requirements
 
-- **OS: macOS** (Windows 는 추후 추가 예정)
-- Node.js 18 이상
-- 선택한 LLM의 CLI 또는 API 키
-- 연결할 데이터베이스
+- **OS: macOS** (Windows support is planned)
+- Node.js 18 or later
+- CLI or API key for your chosen LLM
+- A database to connect to
 
-### 프로젝트 생성
+### Create the project
 
 ```bash
 npx create-database-chat my-app
 ```
 
-대화형 프롬프트에서 LLM 제공자와 데이터베이스를 선택합니다.
+An interactive prompt lets you pick the LLM provider and database.
 
 ```
 ┌  create-database-chat
@@ -70,40 +72,40 @@ npx create-database-chat my-app
 └
 ```
 
-### 프로젝트 실행
+### Run the project
 
 ```bash
 cd my-app
 
-# (선택) 도커로 로컬 DB 기동
+# (optional) start a local DB with Docker
 docker compose -f docker/docker-compose.yml up -d
 
-# (선택) 샘플 데이터 마이그레이션
-#   PostgreSQL → dvdrental, Oracle → HR, MongoDB → sample.json 등
+# (optional) load sample data
+#   PostgreSQL → dvdrental, Oracle → HR, MongoDB → sample.json, etc.
 npm run seed
 
-cp .env.example .env    # 이미 seed 를 돌렸다면 자동 채워짐
+cp .env.example .env    # already populated if you ran seed
 
 npm run schema
-# DB에 접속해 컬렉션(테이블) 목록·건수·필드를 추출하고
-# LLM이 index.md / (collection|table)-mapping.md 를 자동 생성합니다
+# Connects to the DB, extracts collection/table lists, counts, and fields,
+# then the LLM generates index.md / (collection|table)-mapping.md automatically.
 
 npm start
 # → http://localhost:3111
 ```
 
-> **`npm run schema` 동작 방식**
-> 1. `scripts/extract-schema.ts` — .env를 읽어 DB에 접속, 스키마 정보만 stdout 출력 (자격증명 미노출)
-> 2. `scripts/generate-schema.sh` — 출력된 스키마를 프롬프트에 주입해 LLM 호출
-> 3. LLM이 `index.md` / `collection-mapping.md` (SQL DB는 `table-mapping.md`) 생성
+> **How `npm run schema` works**
+> 1. `scripts/extract-schema.ts` — reads `.env`, connects to the DB, and prints schema info to stdout (credentials never leave the server).
+> 2. `scripts/generate-schema.sh` — injects the schema into a prompt and calls the LLM.
+> 3. The LLM produces `index.md` / `collection-mapping.md` (or `table-mapping.md` for SQL DBs).
 
 ---
 
-## 지원 조합 현황
+## Supported combinations
 
-프로젝트 생성 시 DB 연동 방식으로 **"Docker로 새 DB 생성"** 과 **"기존 DB 연동"** 중 하나를 고를 수 있습니다. 검증 상태가 다르니 아래 표를 참고하세요.
+When creating a project you choose between **"Create a new DB with Docker"** and **"Connect to an existing DB"**. Validation status differs — see the tables below.
 
-### Docker 새 DB 모드 (검증 완료)
+### Docker-new-DB mode (verified)
 
 | | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
 |---|:---:|:---:|:---:|:---:|:---:|
@@ -111,167 +113,167 @@ npm start
 | **Gemini** | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
 | **Codex**  | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
 
-### 기존 DB 연동 모드 (미검증)
+### Existing-DB mode (unverified)
 
-템플릿 자체는 생성되지만, 실제 원격/기존 DB 를 붙여서 end-to-end 로 확인한 사례는 아직 없습니다. 사용 중 이슈가 있으면 [이슈](https://github.com/timonPark/database-chat/issues)로 남겨주세요.
+The templates are generated, but end-to-end validation against real remote/existing databases hasn't been done. Please open an [issue](https://github.com/timonPark/database-chat/issues) if you hit a problem.
 
 | | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Claude** | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
 
-✅ 검증 완료 · ⚠️ 템플릿 생성만 확인 (실환경 미검증) · 🔜 준비 중
+✅ verified · ⚠️ template generation confirmed only (not tested end-to-end) · 🔜 coming soon
 
-### 샘플 데이터 (`npm run seed`)
+### Sample data (`npm run seed`)
 
-프로젝트 생성 시 "샘플 데이터 마이그레이션" 옵션을 선택하면 DB별로 실전 예제 데이터를 자동 적재합니다.
+If you enable "sample data migration" during project creation, realistic example data is loaded automatically per DB.
 
-| DB | 샘플 세트 | 출처 |
+| DB | Sample set | Source |
 |---|---|---|
 | **PostgreSQL** | `dvdrental` (15 tables) | postgresqltutorial |
-| **MySQL** | `sample.sql` | 내장 |
+| **MySQL** | `sample.sql` | bundled |
 | **Oracle** | `HR` schema (7 tables) | [oracle/db-sample-schemas](https://github.com/oracle/db-sample-schemas) |
-| **MongoDB** | `sample.json` | 내장 |
-| **MSSQL** | (준비 중) | — |
+| **MongoDB** | `sample.json` | bundled |
+| **MSSQL** | (in preparation) | — |
 
-Oracle은 `gvenzl/oracle-free:23-slim` 을 사용하므로 Apple Silicon(arm64)에서도 네이티브로 동작합니다.
+Oracle uses `gvenzl/oracle-free:23-slim`, so it runs natively on Apple Silicon (arm64).
 
 ---
 
-## 생성된 프로젝트 구조 (claude-mongodb 기준)
+## Generated project structure (claude-mongodb example)
 
 ```
 my-app/
-├── server.ts                  # Express 서버 + LLM spawn 로직
+├── server.ts                  # Express server + LLM spawn logic
 ├── public/
-│   └── index.html             # 채팅 UI (단일 파일, 빌드 없음)
+│   └── index.html             # Chat UI (single file, no build step)
 ├── scripts/
-│   ├── extract-schema.ts      # DB 접속 → 스키마 추출 (자격증명 LLM 미노출)
-│   ├── generate-schema-prompt.md  # LLM에게 전달할 인덱스 생성 프롬프트
-│   └── generate-schema.sh     # schema 추출 → LLM 호출 → 파일 생성 오케스트레이터
-├── collections/               # 컬렉션별 필드 스키마 마크다운
-├── index.md                   # 전체 컬렉션 목록 (npm run schema로 자동 생성)
-├── collection-mapping.md      # 자연어 ↔ 컬렉션명 매핑 (npm run schema로 자동 생성)
+│   ├── extract-schema.ts      # DB connection → schema extraction (credentials never reach the LLM)
+│   ├── generate-schema-prompt.md  # Prompt sent to the LLM for index generation
+│   └── generate-schema.sh     # Orchestrator: schema extraction → LLM call → file generation
+├── collections/               # Per-collection field schema in markdown
+├── index.md                   # Collection index (auto-generated by npm run schema)
+├── collection-mapping.md      # Natural-language ↔ collection-name mapping (auto-generated)
 ├── docker/
-│   └── docker-compose.yml     # 로컬 DB 컨테이너
-├── .env.example               # 환경변수 템플릿
+│   └── docker-compose.yml     # Local DB container
+├── .env.example               # Environment-variable template
 └── package.json
 ```
 
-### 주요 API 엔드포인트
+### Main API endpoints
 
-| 엔드포인트 | 설명 |
-|-----------|------|
-| `POST /chat` | LLM spawn, SSE 스트림으로 응답 |
-| `POST /chat/cancel` | 진행 중인 LLM 프로세스 중단 |
-| `POST /db-query` | 단순 조회 (LLM이 curl로 호출) |
-| `POST /db-aggregate` | 집계·조인 쿼리 (LLM이 curl로 호출) |
-| `POST /db-export` | 엑셀 내보내기용 전체 조회 |
-| `GET /meta` | 컬렉션 인덱스 최종 업데이트 시각 |
-| `GET /meta/table-info` | 컬렉션 목록 마크다운 (UI 모달용) |
+| Endpoint | Description |
+|---|---|
+| `POST /chat` | Spawn the LLM, respond over an SSE stream |
+| `POST /chat/cancel` | Cancel an in-flight LLM process |
+| `POST /db-query` | Simple queries (invoked by the LLM via curl) |
+| `POST /db-aggregate` | Aggregations / joins (invoked by the LLM via curl) |
+| `POST /db-export` | Full-result query for Excel export |
+| `GET /meta` | Last-updated timestamp of the collection index |
+| `GET /meta/table-info` | Collection list markdown (for the UI modal) |
 
 ---
 
-## 환경변수 (.env)
+## Environment variables (.env)
 
-### 공통
+### Common
 
-| 변수명 | 설명 | 기본값 |
-|--------|------|--------|
-| `PORT` | 서버 포트 | `3111` |
-| `DB_HOST` | DB 호스트 | `localhost` |
-| `DB_USER_NAME` | DB 계정명 | — |
-| `DB_USER_PASSWORD` | DB 비밀번호 | — |
-| `CLAUDE_MODEL` | 사용할 Claude 모델 | `claude-haiku-4-5-20251001` |
-| `CLAUDE_MAX_TURNS` | Claude 최대 턴 수 | `10` |
+| Variable | Description | Default |
+|---|---|---|
+| `PORT` | Server port | `3111` |
+| `DB_HOST` | DB host | `localhost` |
+| `DB_USER_NAME` | DB user | — |
+| `DB_USER_PASSWORD` | DB password | — |
+| `CLAUDE_MODEL` | Claude model to use | `claude-haiku-4-5-20251001` |
+| `CLAUDE_MAX_TURNS` | Max turns for Claude | `10` |
 
-### DB별 차이
+### Per-DB differences
 
-| DB | 포트 | 접속 대상 변수 | 매핑 파일 변수 |
+| DB | Port | Target-DB variable | Mapping-file variable |
 |---|---|---|---|
 | MongoDB | `27017` | `DB_DATABASE` | `COLLECTION_MAPPING_FILE=./collection-mapping.md` |
 | MySQL | `3306` | `DB_DATABASE` | `TABLE_MAPPING_FILE=./table-mapping.md` |
 | PostgreSQL | `5432` | `DB_DATABASE` | `TABLE_MAPPING_FILE=./table-mapping.md` |
-| **Oracle** | `1521` | **`DB_SERVICE_NAME`** (PDB 서비스명) | `TABLE_MAPPING_FILE=./table-mapping.md` |
+| **Oracle** | `1521` | **`DB_SERVICE_NAME`** (PDB service name) | `TABLE_MAPPING_FILE=./table-mapping.md` |
 | MSSQL | `1433` | `DB_DATABASE` | `TABLE_MAPPING_FILE=./table-mapping.md` |
 
-> Oracle 만 `DB_DATABASE` 대신 `DB_SERVICE_NAME` 을 사용합니다 (예: `FREEPDB1`).
+> Oracle uses `DB_SERVICE_NAME` instead of `DB_DATABASE` (e.g. `FREEPDB1`).
 
 ---
 
-## 컬렉션 정보 설정
+## Collection info configuration
 
-LLM이 어떤 컬렉션(테이블)을 어떤 키워드로 찾아야 하는지 알려주는 파일입니다.
+These files tell the LLM which collections (tables) to look for and by what keywords.
 
-### 자동 생성 (권장)
+### Auto-generation (recommended)
 
 ```bash
 npm run schema
 ```
 
-DB에 실제 접속해 컬렉션 목록·건수·필드를 추출한 뒤 LLM이 `index.md`와 `collection-mapping.md`를 자동으로 작성합니다. DB 접속 정보는 LLM에 노출되지 않습니다.
+Connects to the DB, extracts the collection list, row counts, and fields, and lets the LLM produce `index.md` and `collection-mapping.md`. DB credentials are never exposed to the LLM.
 
-### 수동 편집
+### Manual editing
 
-자동 생성 후 내용을 직접 수정하거나, 아래 형식에 맞게 처음부터 작성할 수 있습니다.
+You can tweak the auto-generated files or write them from scratch using the format below.
 
-생성된 프로젝트에서 `index.md`와 `collection-mapping.md`를 편집해 LLM이 어떤 컬렉션(테이블)을 어떤 키워드로 찾아야 하는지 알려줍니다.
+Edit `index.md` and `collection-mapping.md` in the generated project to tell the LLM which collections (tables) to look up for which keywords.
 
-**index.md** — 컬렉션 목록 요약 (UI 모달 + 시스템 프롬프트 삽입용)
-
-```markdown
-# 컬렉션 인덱스
-> **database**: `mydb` — 3개 컬렉션
-> 최종 업데이트: 2025-01-01
-
-## 컬렉션 목록
-
-| 컬렉션명 | 한글 설명 |
-|---------|---------|
-| `users` | 사용자 (1,200건) |
-| `orders` | 주문 (45,000건) |
-| `products` | 상품 (800건) |
-```
-
-**collection-mapping.md** — 자연어 키워드 매핑 (LLM이 컬렉션 선택에 활용)
+**index.md** — collection summary (used in the UI modal and injected into the system prompt)
 
 ```markdown
-# 컬렉션 자연어 매핑
+# Collection index
+> **database**: `mydb` — 3 collections
+> Last updated: 2025-01-01
 
-| 컬렉션명 | 자연어 키워드 | 주요 필드 | 설명 |
-|---------|-------------|---------|------|
-| `users` | 사용자, 유저, 회원 | `name`, `email`, `createdAt` | 가입 사용자 |
-| `orders` | 주문, 구매, 결제 | `userId`, `amount`, `status` | 주문 내역 |
+## Collections
+
+| Collection | Description |
+|---|---|
+| `users` | Users (1,200 rows) |
+| `orders` | Orders (45,000 rows) |
+| `products` | Products (800 rows) |
 ```
 
-개별 필드 상세 정보가 필요하면 `collections/<컬렉션명>.md`를 추가하면 LLM이 자동으로 읽습니다.
+**collection-mapping.md** — natural-language keyword mapping (used by the LLM to pick the right collection)
+
+```markdown
+# Collection natural-language mapping
+
+| Collection | Keywords | Key fields | Description |
+|---|---|---|---|
+| `users` | user, member, account | `name`, `email`, `createdAt` | Registered users |
+| `orders` | order, purchase, payment | `userId`, `amount`, `status` | Order history |
+```
+
+If you need per-field detail, add `collections/<collection-name>.md` and the LLM will pick it up automatically.
 
 ---
 
-## 로컬 DB 사용 시 (Docker)
+## Using a local DB (Docker)
 
-프로젝트 생성 시 "Docker로 새 DB 생성" 을 선택하면 `docker/docker-compose.yml` 이 자동으로 만들어지고, 이후 `npm run seed` 로 샘플 데이터까지 한 번에 준비됩니다.
+If you pick "Create a new DB with Docker" during project creation, `docker/docker-compose.yml` is generated and `npm run seed` sets up sample data in one shot.
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d
-npm run seed     # (선택) 샘플 데이터 마이그레이션
+npm run seed     # (optional) load sample data
 ```
 
-`.env` 는 seed 스크립트가 접속 정보를 자동으로 채워줍니다. 원격 DB 를 사용한다면 `.env` 만 직접 수정하고 seed 는 건너뛰면 됩니다.
+The seed script fills in `.env` with connection info automatically. For a remote DB, edit `.env` manually and skip the seed step.
 
 ---
 
-## 레퍼런스 문서 구조
+## Reference documentation layout
 
-새 템플릿을 만들 때 참고하는 구성 요소 문서 폴더입니다.  
-LLM 제공자와 데이터베이스 각각의 구현 방법을 분리해 정리해두고, 이를 조합해 `templates/<llm>-<db>/`를 완성합니다.
+Folders that contain the building-block documentation used when writing a new template.  
+LLM providers and databases are documented separately, then combined into `templates/<llm>-<db>/`.
 
 ```
-1.llm_provider/          ← LLM별 연동 방법 문서
+1.llm_provider/          ← Per-LLM integration docs
 ├── claude/
 ├── gemini/
 └── codex/
 
-2.database/              ← DB별 연동 방법 문서
+2.database/              ← Per-DB integration docs
 ├── MongoDB/
 ├── MySQL/
 ├── PostgreSQL/
@@ -281,22 +283,22 @@ LLM 제공자와 데이터베이스 각각의 구현 방법을 분리해 정리�
 
 ### 1.llm_provider/\<name\>/
 
-각 LLM 제공자 폴더에는 해당 LLM을 서버에서 호출하는 방법을 기록합니다.
+Each LLM-provider folder documents how the server invokes that LLM.
 
-| 파일 | 내용 |
-|------|------|
-| `README.md` | 제공자 개요, 공식 문서 링크, 사전 설치 요건 |
-| `spawn.md` | 서버에서 LLM을 subprocess로 실행하는 방법 (CLI 명령어, 인수, stream 수신 방식) |
-| `system-prompt.md` | DB 조회 어시스턴트용 시스템 프롬프트 작성 가이드 |
-| `env.md` | 필요한 환경변수 목록 및 설명 (API 키, 모델명, 최대 턴 수 등) |
-| `models.md` | 사용 가능한 모델 목록과 속도·비용·품질 비교 |
+| File | Contents |
+|---|---|
+| `README.md` | Provider overview, official docs link, prerequisites |
+| `spawn.md` | How to run the LLM as a subprocess from the server (CLI command, args, stream handling) |
+| `system-prompt.md` | Guide for writing the system prompt for a DB-query assistant |
+| `env.md` | Required environment variables (API key, model name, max turns, etc.) |
+| `models.md` | Available models and speed/cost/quality comparison |
 
-**예시 — `1.llm_provider/claude/spawn.md`**
+**Example — `1.llm_provider/claude/spawn.md`**
 
 ```markdown
-## Claude CLI spawn 방법
+## Spawning the Claude CLI
 
-서버에서 claude CLI를 subprocess로 실행한다.
+Run the claude CLI as a subprocess from the server.
 
 \`\`\`javascript
 spawn('claude', [
@@ -310,35 +312,35 @@ spawn('claude', [
 ])
 \`\`\`
 
-출력: NDJSON 스트림. 각 줄을 JSON.parse해 type 필드로 분기 처리.
-- `system` → 세션 시작
-- `assistant` → LLM 응답 / 도구 호출
-- `user` → 도구 실행 결과
-- `result` → 최종 응답 및 비용
+Output: an NDJSON stream. Parse each line and switch on the `type` field.
+- `system` → session start
+- `assistant` → LLM response / tool call
+- `user` → tool execution result
+- `result` → final response and cost
 ```
 
 ---
 
 ### 2.database/\<name\>/
 
-각 데이터베이스 폴더에는 해당 DB에 연결하고 쿼리하는 방법을 기록합니다.
+Each database folder documents how to connect and query that DB.
 
-| 파일 | 내용 |
-|------|------|
-| `README.md` | DB 개요, 드라이버/라이브러리, 공식 문서 링크 |
-| `connection.md` | 커넥션 풀 설정 방법 (URI 형식, 인증, 최대 연결 수) |
-| `query.md` | `/db-query` 엔드포인트 구현 방법 (단순 조회, 필터, 정렬, 페이지네이션) |
-| `aggregate.md` | `/db-aggregate` 엔드포인트 구현 방법 (조인, 집계, 서브쿼리) |
-| `docker-compose.yml` | 로컬 개발용 DB 컨테이너 설정 |
-| `env.md` | 필요한 환경변수 목록 (호스트, 포트, 계정, 비밀번호 등) |
-| `type-conversion.md` | LLM이 전달하는 JSON 값을 DB 타입으로 변환하는 규칙 (ObjectId, Date, Decimal 등) |
+| File | Contents |
+|---|---|
+| `README.md` | DB overview, driver/library, official docs link |
+| `connection.md` | Connection pool setup (URI format, auth, max connections) |
+| `query.md` | Implementation of the `/db-query` endpoint (simple queries, filters, sorts, pagination) |
+| `aggregate.md` | Implementation of the `/db-aggregate` endpoint (joins, aggregations, subqueries) |
+| `docker-compose.yml` | Local development DB container |
+| `env.md` | Required environment variables (host, port, user, password, etc.) |
+| `type-conversion.md` | Rules for converting LLM-supplied JSON values to DB types (ObjectId, Date, Decimal, etc.) |
 
-**예시 — `2.database/MongoDB/connection.md`**
+**Example — `2.database/MongoDB/connection.md`**
 
 ```markdown
-## MongoDB 커넥션 풀
+## MongoDB connection pool
 
-드라이버: `mongodb` (Node.js 공식 드라이버)
+Driver: `mongodb` (official Node.js driver)
 
 \`\`\`typescript
 import { MongoClient } from 'mongodb';
@@ -348,42 +350,42 @@ const client = new MongoClient(uri, { maxPoolSize: 5 });
 await client.connect();
 \`\`\`
 
-- `maxPoolSize: 5` — 동시 요청 수에 맞게 조정
-- 서버 종료 시 `client.close()` 호출 필요
-- 쿼리 타임아웃: `maxTimeMS: 30000` 옵션으로 강제 설정
+- `maxPoolSize: 5` — tune to expected concurrency
+- Call `client.close()` when the server shuts down
+- Query timeout: enforce with the `maxTimeMS: 30000` option
 ```
 
 ---
 
-### 폴더 구조와 템플릿의 관계
+### How the folders map to templates
 
 ```
 1.llm_provider/claude/     ─┐
-                             ├─ 조합 → templates/claude-mongodb/
+                             ├─ combined into templates/claude-mongodb/
 2.database/MongoDB/        ─┘
 ```
 
-새 조합을 추가할 때는 각 폴더의 문서를 참고해 `server.ts`의 LLM 호출부와 DB 연동부를 작성합니다.
+When adding a new combination, use the docs in each folder as reference for the LLM-invocation and DB-integration parts of `server.ts`.
 
 ---
 
-## 새 조합 템플릿 추가 (기여)
+## Adding a new combination template (contributing)
 
-1. `1.llm_provider/<llm>/`과 `2.database/<db>/` 문서를 참고해 구현 방법을 파악합니다.
-2. `templates/<llm>-<db>/` 폴더를 생성하고 필요한 파일을 작성합니다.
-3. `src/index.ts`의 `AVAILABLE_COMBOS`에 `'<llm>-<db>'`를 추가합니다.
-4. `npm run build`로 재빌드합니다.
+1. Consult `1.llm_provider/<llm>/` and `2.database/<db>/` to learn the integration.
+2. Create `templates/<llm>-<db>/` and add the required files.
+3. Add `'<llm>-<db>'` to `AVAILABLE_COMBOS` in `src/index.ts`.
+4. Rebuild with `npm run build`.
 
 ```typescript
 // src/index.ts
 const AVAILABLE_COMBOS = new Set([
   'claude-mongodb',
-  'claude-mysql',   // 추가 예시
+  'claude-mysql',   // example
 ]);
 ```
 
 ---
 
-## 라이선스
+## License
 
 MIT

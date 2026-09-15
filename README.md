@@ -8,6 +8,9 @@ LLM 제공자(Claude / Gemini / Codex)와 데이터베이스(MongoDB / MySQL / P
 $ npx create-database-chat my-app
 ```
 
+- Repo: <https://github.com/timonPark/database-chat>
+- 라이선스: MIT
+
 ---
 
 ## 동작 방식
@@ -70,12 +73,19 @@ npx create-database-chat my-app
 
 ```bash
 cd my-app
-cp .env.example .env
-# .env에 DB 접속 정보 입력
+
+# (선택) 도커로 로컬 DB 기동
+docker compose -f docker/docker-compose.yml up -d
+
+# (선택) 샘플 데이터 마이그레이션
+#   PostgreSQL → dvdrental, Oracle → HR, MongoDB → sample.json 등
+npm run seed
+
+cp .env.example .env    # 이미 seed 를 돌렸다면 자동 채워짐
 
 npm run schema
 # DB에 접속해 컬렉션(테이블) 목록·건수·필드를 추출하고
-# LLM이 index.md / collection-mapping.md 를 자동 생성합니다
+# LLM이 index.md / (collection|table)-mapping.md 를 자동 생성합니다
 
 npm start
 # → http://localhost:3111
@@ -92,11 +102,25 @@ npm start
 
 | | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **Claude** | ✅ | 🔜 | 🔜 | 🔜 | 🔜 |
+| **Claude** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Gemini** | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
 | **Codex**  | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
 
 ✅ 사용 가능 · 🔜 준비 중
+
+### 샘플 데이터 (`npm run seed`)
+
+프로젝트 생성 시 "샘플 데이터 마이그레이션" 옵션을 선택하면 DB별로 실전 예제 데이터를 자동 적재합니다.
+
+| DB | 샘플 세트 | 출처 |
+|---|---|---|
+| **PostgreSQL** | `dvdrental` (15 tables) | postgresqltutorial |
+| **MySQL** | `sample.sql` | 내장 |
+| **Oracle** | `HR` schema (7 tables) | [oracle/db-sample-schemas](https://github.com/oracle/db-sample-schemas) |
+| **MongoDB** | `sample.json` | 내장 |
+| **MSSQL** | (준비 중) | — |
+
+Oracle은 `gvenzl/oracle-free:23-slim` 을 사용하므로 Apple Silicon(arm64)에서도 네이티브로 동작합니다.
 
 ---
 
@@ -136,17 +160,28 @@ my-app/
 
 ## 환경변수 (.env)
 
+### 공통
+
 | 변수명 | 설명 | 기본값 |
 |--------|------|--------|
 | `PORT` | 서버 포트 | `3111` |
-| `DB_HOST` | DB 호스트 | — |
-| `DB_PORT` | DB 포트 | `27017` |
-| `DB_DATABASE` | 데이터베이스명 | — |
+| `DB_HOST` | DB 호스트 | `localhost` |
 | `DB_USER_NAME` | DB 계정명 | — |
 | `DB_USER_PASSWORD` | DB 비밀번호 | — |
 | `CLAUDE_MODEL` | 사용할 Claude 모델 | `claude-haiku-4-5-20251001` |
 | `CLAUDE_MAX_TURNS` | Claude 최대 턴 수 | `10` |
-| `COLLECTION_MAPPING_FILE` | 매핑 파일 경로 | `./collection-mapping.md` |
+
+### DB별 차이
+
+| DB | 포트 | 접속 대상 변수 | 매핑 파일 변수 |
+|---|---|---|---|
+| MongoDB | `27017` | `DB_DATABASE` | `COLLECTION_MAPPING_FILE=./collection-mapping.md` |
+| MySQL | `3306` | `DB_DATABASE` | `TABLE_MAPPING_FILE=./table-mapping.md` |
+| PostgreSQL | `5432` | `DB_DATABASE` | `TABLE_MAPPING_FILE=./table-mapping.md` |
+| **Oracle** | `1521` | **`DB_SERVICE_NAME`** (PDB 서비스명) | `TABLE_MAPPING_FILE=./table-mapping.md` |
+| MSSQL | `1433` | `DB_DATABASE` | `TABLE_MAPPING_FILE=./table-mapping.md` |
+
+> Oracle 만 `DB_DATABASE` 대신 `DB_SERVICE_NAME` 을 사용합니다 (예: `FREEPDB1`).
 
 ---
 
@@ -199,15 +234,16 @@ DB에 실제 접속해 컬렉션 목록·건수·필드를 추출한 뒤 LLM이 
 
 ---
 
-## 로컬 MongoDB 사용 시
+## 로컬 DB 사용 시 (Docker)
 
-도커가 설치되어 있다면 아래 명령어로 로컬 MongoDB를 바로 띄울 수 있습니다.
+프로젝트 생성 시 "Docker로 새 DB 생성" 을 선택하면 `docker/docker-compose.yml` 이 자동으로 만들어지고, 이후 `npm run seed` 로 샘플 데이터까지 한 번에 준비됩니다.
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d
+npm run seed     # (선택) 샘플 데이터 마이그레이션
 ```
 
-`.env`의 DB 접속 정보를 `docker-compose.yml`의 값과 맞추면 됩니다.
+`.env` 는 seed 스크립트가 접속 정보를 자동으로 채워줍니다. 원격 DB 를 사용한다면 `.env` 만 직접 수정하고 seed 는 건너뛰면 됩니다.
 
 ---
 

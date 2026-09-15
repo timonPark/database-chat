@@ -35,6 +35,7 @@ LLM은 직접 DB에 접근하지 않고 서버 내부 HTTP 엔드포인트(`/db-
 
 ### 요구사항
 
+- **OS: macOS** (Windows 는 추후 추가 예정)
 - Node.js 18 이상
 - 선택한 LLM의 CLI 또는 API 키
 - 연결할 데이터베이스

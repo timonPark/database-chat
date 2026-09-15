@@ -15,6 +15,34 @@
     "dist",
     "templates"
   ],
+  "keywords": [
+    "cli",
+    "scaffold",
+    "create-app",
+    "llm",
+    "claude",
+    "gemini",
+    "codex",
+    "database",
+    "chat",
+    "natural-language",
+    "mongodb",
+    "mysql",
+    "postgresql",
+    "oracle",
+    "mssql",
+    "sql"
+  ],
+  "author": "timonPark <m05214@naver.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/timonPark/database-chat#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/timonPark/database-chat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/timonPark/database-chat/issues"
+  },
   "dependencies": {
     "@clack/prompts": "^0.9.1",
     "picocolors": "^1.1.1"

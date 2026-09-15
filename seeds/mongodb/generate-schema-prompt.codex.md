@@ -18,11 +18,15 @@ Last updated: `{{TODAY}}`
 ```json
 {
   "index": "complete markdown content for index.md",
-  "mapping": "complete markdown content for collection-mapping.md"
+  "mapping": "complete markdown content for collection-mapping.md",
+  "collections": {
+    "collection_name": "complete markdown content for collections/collection_name.md"
+  }
 }
 ```
 
-Both values must be strings. Escape newlines as `\n` and double quotes as needed so the entire response is parseable JSON.
+The `index` and `mapping` values must be strings. Escape newlines as `\n` and double quotes as needed so the entire response is parseable JSON.
+The `collections` value must contain one key for every collection. Each key must be the exact collection name and each value must be the complete Markdown content for that collection's detail file.
 
 ## Input format
 
@@ -87,3 +91,26 @@ Create Korean markdown with this structure:
 - Prefer important fields from the schema as `주요 필드`; omit sensitive fields such as `password`, `passHash`, `passwd`, `pwd`, and `secret`.
 - If a collection has no sampled fields, still include it with a useful description based on its name.
 - Keep collection names exactly as provided.
+
+## Collection detail requirements
+
+For every collection, add a `collections` entry using this Markdown structure:
+
+```markdown
+# collection_name
+
+> **database**: `{{DB_DATABASE}}` | **건수**: 123건
+
+## 필드 목록
+
+| 필드명 | 타입 | 설명 |
+|--------|------|------|
+| `_id` | ObjectId | 고유 식별자 |
+| `field_name` | string | 한글 설명 |
+
+## 관련 컬렉션
+
+- 관련 참조 관계 서술
+```
+
+Include all sampled fields, omit sensitive fields such as `password`, `passHash`, `passwd`, `pwd`, and `secret`, and preserve the exact collection name in the heading and file key.

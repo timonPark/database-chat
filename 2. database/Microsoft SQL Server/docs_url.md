@@ -1,0 +1,1 @@
+https://learn.microsoft.com/ko-kr/sql/?view=sql-server-ver17

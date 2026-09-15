@@ -1,0 +1,30 @@
+{
+  "name": "create-database-chat",
+  "version": "0.1.0",
+  "description": "Scaffold a natural-language database chat app powered by LLM + your DB",
+  "type": "module",
+  "bin": {
+    "create-database-chat": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "dependencies": {
+    "@clack/prompts": "^0.9.1",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

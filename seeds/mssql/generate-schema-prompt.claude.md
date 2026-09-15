@@ -1,0 +1,110 @@
+# Microsoft SQL Server 스키마 인덱스 생성
+
+아래는 SQL Server 데이터베이스 `{{DB_DATABASE}}`의 테이블 정보입니다:
+
+```
+{{SCHEMA}}
+```
+
+위 정보를 분석해서 아래 파일들을 **bash heredoc으로 현재 디렉토리에 직접 작성**하세요.
+
+## 생성할 파일
+
+1. `index.md` — 전체 테이블 인덱스 + 파일 트리 구조
+2. `table-mapping.md` — 자연어 키워드 매핑
+3. `tables/<테이블명>.md` — 테이블별 컬럼 상세 명세 (각 테이블마다 개별 파일)
+
+## index.md 형식
+
+```
+# DB 테이블 인덱스
+> **database**: `{{DB_DATABASE}}` — N개 테이블 / M건
+> 최종 업데이트: {{TODAY}}
+
+## 테이블 목록
+
+### 카테고리명
+| 테이블명 | 한글 설명 |
+|---------|---------|
+| `테이블명` | 설명 (N건) |
+
+---
+
+## 파일 구조
+
+```
+tables/
+├── table1.md       # 설명 (N건)
+├── table2.md       # 설명 (N건)
+```
+
+---
+
+## 컬럼 타입 규칙
+
+- 날짜 컬럼 → DATETIME / DATE
+- 금액 컬럼 → DECIMAL / MONEY
+```
+
+## table-mapping.md 형식
+
+```
+# 테이블 자연어 매핑 정의서
+
+> **database**: `{{DB_DATABASE}}`
+
+---
+
+## 카테고리명
+
+| 테이블명 | 자연어 키워드 | 주요 컬럼 | 설명 |
+|---------|-------------|---------|------|
+| `테이블명` | 키워드1, 키워드2 | `col1`, `col2` | 설명 (N건) |
+```
+
+## tables/<테이블명>.md 형식
+
+```
+# 테이블명
+
+> **database**: `{{DB_DATABASE}}` | **건수**: N건
+
+## 컬럼 목록
+
+| 컬럼명 | 타입 | Null | Key | 설명 |
+|--------|------|------|-----|------|
+| `col_name` | nvarchar(100) | NOT NULL | PK | 한글 설명 |
+
+## 관련 테이블
+
+- 관련 외래키 관계 서술
+```
+
+## 작성 지침
+
+- 테이블을 도메인별로 카테고리화하세요
+- 한국어 키워드는 자연어 채팅 검색에 적합하게 작성하세요
+- 건수 기준 내림차순으로 정렬하세요
+- 각 컬럼의 한글 설명은 컬럼명과 타입을 참고해 자연스럽게 작성하세요
+- **`[TABLE]` 항목의 테이블명은 `스키마.테이블명` 형식입니다 (예: `SalesLT.Product`, `dbo.ErrorLog`)**
+- **index.md, table-mapping.md의 테이블 참조는 반드시 스키마 포함 전체명 사용 (예: `SalesLT.Product`)**
+- **파일명은 스키마 포함 그대로 사용 (예: `tables/SalesLT.Product.md`)**
+
+## 파일 저장 방법
+
+```bash
+mkdir -p tables
+
+cat > index.md << 'EOF'
+(내용 — 테이블명은 SalesLT.Product 형식으로)
+EOF
+
+cat > table-mapping.md << 'EOF'
+(내용 — 테이블명은 SalesLT.Product 형식으로)
+EOF
+
+# 각 테이블마다 반복 (파일명에 스키마 포함)
+cat > tables/SalesLT.Product.md << 'EOF'
+(내용)
+EOF
+```

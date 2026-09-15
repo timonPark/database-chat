@@ -1,0 +1,24 @@
+name: {{PROJECT_NAME}}
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: {{PROJECT_NAME}}-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: mydb
+      POSTGRES_USER: dbuser
+      POSTGRES_PASSWORD: changeme
+    volumes:
+      - {{PROJECT_NAME}}-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbuser -d mydb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  {{PROJECT_NAME}}-postgres-data:

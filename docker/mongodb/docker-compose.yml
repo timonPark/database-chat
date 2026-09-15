@@ -1,0 +1,28 @@
+name: {{PROJECT_NAME}}
+
+services:
+  mongodb:
+    image: mongo:8.0
+    container_name: {{PROJECT_NAME}}-mongodb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: changeme
+      MONGO_INITDB_DATABASE: mydb
+    volumes:
+      - {{PROJECT_NAME}}-mongodb-data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --username root --password changeme --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  {{PROJECT_NAME}}-mongodb-data:

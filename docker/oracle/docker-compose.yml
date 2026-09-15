@@ -1,0 +1,27 @@
+name: {{PROJECT_NAME}}
+
+# Oracle Database 23c Free (무료 라이선스, gvenzl/oracle-free 이미지 사용)
+# amd64/arm64 멀티아키텍처 지원 — Apple Silicon에서도 네이티브로 동작합니다.
+# 이미지 최초 기동 시 초기화에 2~5분 소요될 수 있습니다.
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    container_name: {{PROJECT_NAME}}-oracle
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1521:1521"
+    environment:
+      ORACLE_PASSWORD: changeme        # SYS / SYSTEM 계정 공통 비밀번호
+      APP_USER: dbuser                 # 애플리케이션 전용 계정
+      APP_USER_PASSWORD: changeme
+    volumes:
+      - {{PROJECT_NAME}}-oracle-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+volumes:
+  {{PROJECT_NAME}}-oracle-data:

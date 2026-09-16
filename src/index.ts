@@ -40,6 +40,7 @@ const AVAILABLE_COMBOS = new Set([
   'claude-mssql',
   'codex-mongodb',
   'codex-mysql',
+  'codex-postgresql',
 ]);
 
 // ── 유틸 ─────────────────────────────────────────────────────────────────────
@@ -1343,6 +1344,26 @@ async function main(): Promise<void> {
           const result = spawnSync(
             'claude',
             ['-p', prompt, '--allowedTools', 'Bash', '--model', model, '--max-turns', '20'],
+            { cwd: targetDir, stdio: 'inherit' },
+          );
+          if (result.status !== 0) {
+            console.log(pc.yellow('\n⚠  Auto-setup에 문제가 발생했습니다. 위 출력 내용을 확인하세요.'));
+          }
+        } else if (provider === 'codex') {
+          const codexBin = process.env.CODEX_CLI_PATH
+            ?? (existsSync('/Applications/ChatGPT.app/Contents/Resources/codex')
+              ? '/Applications/ChatGPT.app/Contents/Resources/codex'
+              : 'codex');
+          const model = process.env.CODEX_MODEL?.trim() || 'gpt-5.6-luna';
+          const result = spawnSync(
+            codexBin,
+            [
+              'exec',
+              '--skip-git-repo-check',
+              '--sandbox', 'danger-full-access',
+              '--model', model,
+              prompt,
+            ],
             { cwd: targetDir, stdio: 'inherit' },
           );
           if (result.status !== 0) {

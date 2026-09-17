@@ -18,11 +18,15 @@ Last updated: `{{TODAY}}`
 ```json
 {
   "index": "complete markdown content for index.md",
-  "mapping": "complete markdown content for table-mapping.md"
+  "mapping": "complete markdown content for table-mapping.md",
+  "tables": {
+    "SalesLT.Product": "complete markdown content for tables/SalesLT.Product.md"
+  }
 }
 ```
 
-Both values must be strings. Escape newlines as `\n` and double quotes as needed so the entire response is parseable JSON.
+The `index` and `mapping` values must be strings. Escape newlines as `\n` and double quotes as needed so the entire response is parseable JSON.
+The `tables` value must contain one key for every table. Each key must be the exact schema-qualified table name (e.g. `SalesLT.Product`, `dbo.ErrorLog`) and each value must be the complete Markdown content for that table's detail file.
 
 ## Input format
 
@@ -48,7 +52,7 @@ Create Korean markdown with this structure:
 ### 카테고리명
 | 테이블명 | 한글 설명 |
 |---------|---------|
-| `SalesLT.Product` | 설명 (123건) |
+| `SalesLT.Product` | 설명 (N건) |
 
 ---
 
@@ -56,7 +60,7 @@ Create Korean markdown with this structure:
 
 ```text
 tables/
-├── SalesLT.Product.md    # 설명 (123건)
+├── SalesLT.Product.md    # 설명 (N건)
 ```
 
 ---
@@ -83,7 +87,7 @@ Create Korean markdown with this structure:
 
 | 테이블명 | 자연어 키워드 | 주요 컬럼 | 설명 |
 |---------|-------------|---------|------|
-| `SalesLT.Product` | 키워드1, 키워드2, 키워드3 | `ProductID`, `Name` | 설명 (123건) |
+| `SalesLT.Product` | 키워드1, 키워드2, 키워드3 | `ProductID`, `Name` | 설명 (N건) |
 ```
 
 ## Writing rules
@@ -96,3 +100,26 @@ Create Korean markdown with this structure:
 - Include Korean search keywords that a user might type in a chat UI.
 - Prefer business-relevant columns and primary key columns as `주요 컬럼`.
 - Omit sensitive columns such as `password`, `pass_hash`, `passwd`, `pwd`, and `secret`.
+
+## Table detail requirements
+
+For every table, add a `tables` entry using this Markdown structure:
+
+```markdown
+# SalesLT.Product
+
+> **database**: `{{DB_DATABASE}}` | **건수**: N건
+
+## 컬럼 목록
+
+| 컬럼명 | 타입 | Null | Key | 설명 |
+|--------|------|------|-----|------|
+| `ProductID` | int | NOT NULL | PK | 상품 식별자 |
+| `Name` | nvarchar | NOT NULL |  | 상품명 |
+
+## 관련 테이블
+
+- 관련 외래키 관계 서술
+```
+
+Include all columns, omit sensitive columns such as `password`, `pass_hash`, `passwd`, `pwd`, and `secret`, and preserve the exact schema-qualified table name in the heading and file key (e.g. `SalesLT.Product`, not just `Product`).

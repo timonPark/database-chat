@@ -41,6 +41,7 @@ const AVAILABLE_COMBOS = new Set([
   'codex-mongodb',
   'codex-mysql',
   'codex-postgresql',
+  'codex-mssql',
 ]);
 
 // ── 유틸 ─────────────────────────────────────────────────────────────────────

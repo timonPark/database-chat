@@ -56,7 +56,7 @@ npx create-database-chat my-app
 ◆  LLM provider:
 │  ● Claude          Anthropic — claude-haiku / sonnet
 │  ○ Gemini          Google — coming soon
-│  ○ Codex           OpenAI — coming soon
+│  ○ Codex           OpenAI — gpt-5.6-luna
 └
 
 ◆  Database:
@@ -111,7 +111,9 @@ npm start
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Claude** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Gemini** | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
-| **Codex**  | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
+| **Codex**  | ✅ | ✅ | ✅ | ✅[^1] | ✅ |
+
+[^1]: Codex + Oracle: `docker-compose.yml`에서 `.env`로 자동 반영되는 값 목록에 Oracle의 `APP_USER` / `APP_USER_PASSWORD` / `DB_SERVICE_NAME=FREEPDB1`가 아직 포함돼 있지 않아 `docker compose up` 이후 `.env`를 수동 편집해야 합니다. `claude-oracle`도 동일한 갭입니다.
 
 ### 기존 DB 연동 모드 (미검증)
 
@@ -120,6 +122,7 @@ npm start
 | | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Claude** | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+| **Codex**  | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
 
 ✅ 검증 완료 · ⚠️ 템플릿 생성만 확인 (실환경 미검증) · 🔜 준비 중
 
@@ -183,8 +186,10 @@ my-app/
 | `DB_HOST` | DB 호스트 | `localhost` |
 | `DB_USER_NAME` | DB 계정명 | — |
 | `DB_USER_PASSWORD` | DB 비밀번호 | — |
-| `CLAUDE_MODEL` | 사용할 Claude 모델 | `claude-haiku-4-5-20251001` |
-| `CLAUDE_MAX_TURNS` | Claude 최대 턴 수 | `10` |
+| `CLAUDE_MODEL` | 사용할 Claude 모델 (Claude 전용) | `claude-haiku-4-5-20251001` |
+| `CLAUDE_MAX_TURNS` | Claude 최대 턴 수 (Claude 전용) | `10` |
+| `CODEX_MODEL` | 사용할 Codex 모델 (Codex 전용) | `gpt-5.6-luna` |
+| `CODEX_CLI_PATH` | Codex CLI 바이너리 경로 — `PATH`에 없을 때 지정 (Codex 전용) | `/Applications/ChatGPT.app/Contents/Resources/codex` |
 
 ### DB별 차이
 
@@ -380,7 +385,16 @@ await client.connect();
 // src/index.ts
 const AVAILABLE_COMBOS = new Set([
   'claude-mongodb',
-  'claude-mysql',   // 추가 예시
+  'claude-mysql',
+  'claude-postgresql',
+  'claude-oracle',
+  'claude-mssql',
+  'codex-mongodb',
+  'codex-mysql',
+  'codex-postgresql',
+  'codex-oracle',
+  'codex-mssql',
+  // 'gemini-<db>' — 준비 중
 ]);
 ```
 

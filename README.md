@@ -56,7 +56,7 @@ An interactive prompt lets you pick the LLM provider and database.
 ◆  LLM provider:
 │  ● Claude          Anthropic — claude-haiku / sonnet
 │  ○ Gemini          Google — coming soon
-│  ○ Codex           OpenAI — coming soon
+│  ○ Codex           OpenAI — gpt-5.6-luna
 └
 
 ◆  Database:
@@ -111,7 +111,9 @@ When creating a project you choose between **"Create a new DB with Docker"** and
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Claude** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Gemini** | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
-| **Codex**  | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
+| **Codex**  | ✅ | ✅ | ✅ | ✅[^1] | ✅ |
+
+[^1]: Codex + Oracle: the `.env` auto-fill from `docker-compose.yml` doesn't yet cover Oracle's `APP_USER` / `APP_USER_PASSWORD` / `DB_SERVICE_NAME=FREEPDB1`, so edit `.env` manually after `docker compose up`. Same gap exists for `claude-oracle`.
 
 ### Existing-DB mode (unverified)
 
@@ -120,6 +122,7 @@ The templates are generated, but end-to-end validation against real remote/exist
 | | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Claude** | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+| **Codex**  | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
 
 ✅ verified · ⚠️ template generation confirmed only (not tested end-to-end) · 🔜 coming soon
 
@@ -183,8 +186,10 @@ my-app/
 | `DB_HOST` | DB host | `localhost` |
 | `DB_USER_NAME` | DB user | — |
 | `DB_USER_PASSWORD` | DB password | — |
-| `CLAUDE_MODEL` | Claude model to use | `claude-haiku-4-5-20251001` |
-| `CLAUDE_MAX_TURNS` | Max turns for Claude | `10` |
+| `CLAUDE_MODEL` | Claude model (Claude provider only) | `claude-haiku-4-5-20251001` |
+| `CLAUDE_MAX_TURNS` | Max turns for Claude (Claude provider only) | `10` |
+| `CODEX_MODEL` | Codex model (Codex provider only) | `gpt-5.6-luna` |
+| `CODEX_CLI_PATH` | Codex CLI binary path when not on `PATH` (Codex provider only) | `/Applications/ChatGPT.app/Contents/Resources/codex` |
 
 ### Per-DB differences
 
@@ -380,7 +385,16 @@ When adding a new combination, use the docs in each folder as reference for the 
 // src/index.ts
 const AVAILABLE_COMBOS = new Set([
   'claude-mongodb',
-  'claude-mysql',   // example
+  'claude-mysql',
+  'claude-postgresql',
+  'claude-oracle',
+  'claude-mssql',
+  'codex-mongodb',
+  'codex-mysql',
+  'codex-postgresql',
+  'codex-oracle',
+  'codex-mssql',
+  // 'gemini-<db>' — coming soon
 ]);
 ```
 

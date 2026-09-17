@@ -18,11 +18,15 @@ Last updated: `{{TODAY}}`
 ```json
 {
   "index": "complete markdown content for index.md",
-  "mapping": "complete markdown content for table-mapping.md"
+  "mapping": "complete markdown content for table-mapping.md",
+  "tables": {
+    "TABLE_NAME": "complete markdown content for tables/TABLE_NAME.md"
+  }
 }
 ```
 
-Both values must be strings. Escape newlines as `\n` and double quotes as needed so the entire response is parseable JSON.
+The `index` and `mapping` values must be strings. Escape newlines as `\n` and double quotes as needed so the entire response is parseable JSON.
+The `tables` value must contain one key for every table. Each key must be the exact Oracle table name (preserve uppercase, e.g. `EMPLOYEES`) and each value must be the complete Markdown content for that table's detail file.
 
 ## Input format
 
@@ -48,7 +52,7 @@ Create Korean markdown with this structure:
 ### 카테고리명
 | 테이블명 | 한글 설명 |
 |---------|---------|
-| `TABLE_NAME` | 설명 (123건) |
+| `TABLE_NAME` | 설명 (N건) |
 
 ---
 
@@ -56,7 +60,7 @@ Create Korean markdown with this structure:
 
 ```text
 tables/
-├── TABLE_NAME.md    # 설명 (123건)
+├── TABLE_NAME.md    # 설명 (N건)
 ```
 
 ---
@@ -83,7 +87,7 @@ Create Korean markdown with this structure:
 
 | 테이블명 | 자연어 키워드 | 주요 컬럼 | 설명 |
 |---------|-------------|---------|------|
-| `TABLE_NAME` | 키워드1, 키워드2, 키워드3 | `COL1`, `COL2` | 설명 (123건) |
+| `TABLE_NAME` | 키워드1, 키워드2, 키워드3 | `COL1`, `COL2` | 설명 (N건) |
 ```
 
 ## Writing rules
@@ -95,3 +99,26 @@ Create Korean markdown with this structure:
 - Prefer business-relevant columns and primary key columns as `주요 컬럼`.
 - Omit sensitive columns such as `PASSWORD`, `PASS_HASH`, `PASSWD`, `PWD`, and `SECRET`.
 - Keep Oracle table and column names exactly as provided, including uppercase names.
+
+## Table detail requirements
+
+For every table, add a `tables` entry using this Markdown structure:
+
+```markdown
+# TABLE_NAME
+
+> **database**: `{{DB_DATABASE}}` | **건수**: N건
+
+## 컬럼 목록
+
+| 컬럼명 | 타입 | Null | Key | 설명 |
+|--------|------|------|-----|------|
+| `COLUMN_NAME` | VARCHAR2 | NOT NULL | PK | 한글 설명 |
+| `AMOUNT` | NUMBER | NULL |  | 금액 |
+
+## 관련 테이블
+
+- 관련 외래키 관계 서술
+```
+
+Include all columns, omit sensitive columns such as `PASSWORD`, `PASS_HASH`, `PASSWD`, `PWD`, and `SECRET`, and preserve the exact Oracle table name (uppercase) in the heading and file key.

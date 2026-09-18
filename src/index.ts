@@ -46,6 +46,7 @@ const AVAILABLE_COMBOS = new Set([
   'gemini-mongodb',
   'gemini-mysql',
   'gemini-postgresql',
+  'gemini-oracle',
 ]);
 
 // ── 유틸 ─────────────────────────────────────────────────────────────────────

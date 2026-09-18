@@ -45,6 +45,7 @@ const AVAILABLE_COMBOS = new Set([
   'codex-oracle',
   'gemini-mongodb',
   'gemini-mysql',
+  'gemini-postgresql',
 ]);
 
 // ── 유틸 ─────────────────────────────────────────────────────────────────────

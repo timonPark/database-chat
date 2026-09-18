@@ -55,6 +55,7 @@ interface DbAggregateBody {
   database?: string;
   collection?: string;
   pipeline?: Document[];
+  limit?: number;
 }
 
 interface DbExportBody {
@@ -194,7 +195,8 @@ ${buildCollectionGuide()}
 - $lookup 사용 시 반드시 $group으로 중복 제거 (1:N 조인 시 중복 발생)
 - $lookup 대상은 같은 database의 컬렉션만 가능하며, 조인 대상 foreignField에 맞는 필드 타입(ObjectId/Number/String)을 확인한다
 - $group에서 조인 대상 필드는 $first로 전체 수집 후 $replaceRoot로 루트 교체 — 필드를 개별 나열하지 말 것
-- $limit은 반드시 ${limit}을 사용한다. 엑셀 내보내기는 동일 쿼리를 그대로 실행함
+- /db-query 의 limit 필드 및 /db-aggregate 파이프라인 마지막 stage는 반드시 { "$limit": ${limit} } 로 명시한다. aggregate 에서 $limit 누락 시 서버가 강제 주입하며 응답에 autoLimitedTo 필드가 포함됨 — 그 경우 재쿼리 금지하고 반환된 상위 ${limit}건으로 즉시 응답한다. 엑셀 내보내기는 원본 파이프라인 그대로 재실행함
+- 응답 JSON에 truncatedTo 필드가 있으면 LLM tool 출력 한도로 서버가 상위 truncatedTo건만 전송한 상태다. 재쿼리·python/wc 우회·재시도 모두 금지, 반환된 data 배열 그대로 사용자에게 응답한다. 더 많은 필드/건수가 필요하면 다음 요청에서 $project로 필드를 줄이거나 limit을 낮춰 재요청한다
 - 결과 없으면 즉시 "조회된 데이터가 없습니다"
 - 출력이 파일로 저장되면 파일 읽지 말고 $group으로 줄여 재쿼리
 - 오류 시 원인 설명
@@ -304,6 +306,33 @@ function withSensitiveFieldsUnset(pipeline: Document[]): Document[] {
   return [...pipeline, { $unset: SENSITIVE_FIELDS }];
 }
 
+// LLM tool 출력 한도(약 8KB, 여유 마진 포함)에 맞춰 응답 body를 자동 축약.
+const TOOL_OUTPUT_MAX_BYTES: number = 6500;
+
+function capForToolOutput(body: Record<string, unknown>, maxBytes: number = TOOL_OUTPUT_MAX_BYTES): Record<string, unknown> {
+  const data = body.data;
+  if (!Array.isArray(data) || data.length === 0) return body;
+  const wrapper: Record<string, unknown> = { ...body, data: [] };
+  const wrapperSize: number = Buffer.byteLength(JSON.stringify(wrapper), 'utf8');
+  let usedBytes: number = wrapperSize;
+  let kept: number = 0;
+  for (const item of data) {
+    const itemBytes: number = Buffer.byteLength(JSON.stringify(item), 'utf8') + 1;
+    if (usedBytes + itemBytes > maxBytes) break;
+    usedBytes += itemBytes;
+    kept++;
+  }
+  if (kept >= data.length) return body;
+  const originalCount: number = data.length;
+  return {
+    ...body,
+    data: data.slice(0, kept),
+    truncatedTo: kept,
+    truncatedFrom: originalCount,
+    hint: `LLM tool 출력 한도(약 8KB) 대응: 요청한 ${originalCount}건 중 상위 ${kept}건만 전송. 재쿼리·재실행 금지. 이 결과 그대로 사용자에게 응답하세요. 더 많은 필드가 필요하면 다음 시도에서 $project로 필드를 줄이거나 limit을 낮추세요.`,
+  };
+}
+
 // ── Claude 이벤트 핸들러 ──────────────────────────────────────────────────────
 
 function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
@@ -339,12 +368,11 @@ function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
               const rawData: string | undefined = singleMatch?.[1] ?? doubleMatch?.[1]?.replace(/\\"/g, '"');
               if (rawData) {
                 try {
-                  const parsed: unknown = JSON.parse(rawData);
-                  const display: string = JSON.stringify(parsed, null, 2);
-                  send('log', display.length > 600 ? display.slice(0, 600) + '\n...(생략)' : display);
+                  // 공백 없는 압축 JSON — 사용자가 UI 로그에서 그대로 복사해 쿼리 에디터로 검증 가능하도록.
+                  send('log', JSON.stringify(JSON.parse(rawData)));
                 } catch {
                   const collMatch: RegExpMatchArray | null = rawData.match(/["']collection["']\s*:\s*["']([^"']+)["']/);
-                  send('log', collMatch ? `collection: ${collMatch[1]}` : rawData.slice(0, 200));
+                  send('log', collMatch ? `collection: ${collMatch[1]}` : rawData);
                 }
               } else {
                 const fallbackMatch: RegExpMatchArray | null = cmd.match(/["']collection["']\s*:\s*["']([^"']+)["']/);
@@ -483,7 +511,7 @@ app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Res
     const docs: WithId<Document>[] = await cursor.limit(limit).toArray();
     const dbTimeMs: number = Date.now() - dbStart;
 
-    return res.json({ count: totalCount, data: docs, dbTimeMs });
+    return res.json(capForToolOutput({ count: totalCount, data: docs, dbTimeMs }));
   } catch (err) {
     if (isTimeoutError(err)) {
       console.warn(`${ts()} [타임아웃] ${DB_TIMEOUT_MSG} — ${collection}`);
@@ -500,6 +528,7 @@ app.post('/db-aggregate', async (req: Request<object, object, DbAggregateBody>, 
     database,
     collection,
     pipeline = [],
+    limit = 20,
   } = req.body;
 
   if (!collection) {
@@ -516,36 +545,31 @@ app.post('/db-aggregate', async (req: Request<object, object, DbAggregateBody>, 
     const pipelineArr: Document[] = pipeline as Document[];
     assertReadOnlyPipeline(pipelineArr);
 
-    // $project 직전(또는 맨 끝)의 $limit만 "미리보기 limit"으로 판별
+    // terminal $limit이 없으면 서버가 강제 주입 — LLM tool 출력 크기 한도 초과 방지
     const lastNonProject: Document | undefined = [...pipelineArr].reverse().find((s: Document) => !('$project' in s));
-    const isTerminalLimit: boolean = lastNonProject != null && '$limit' in lastNonProject;
+    const hadTerminalLimit: boolean = lastNonProject != null && '$limit' in lastNonProject;
+    const effectivePipeline: Document[] = hadTerminalLimit
+      ? pipelineArr
+      : [...pipelineArr, { $limit: limit }];
+    const autoLimited: boolean = !hadTerminalLimit;
 
-    const execPipeline: Document[] = withSensitiveFieldsUnset(pipelineArr);
+    const execPipeline: Document[] = withSensitiveFieldsUnset(effectivePipeline);
+    const countPipeline: Document[] = [
+      ...pipelineForCount(effectivePipeline),
+      { $count: 'total' },
+    ];
 
     const dbStart: number = Date.now();
-    let docs: Document[];
-    let totalCount: number;
-
-    if (isTerminalLimit) {
-      // 미리보기 $limit 감지 → count 쿼리와 exec를 병렬 실행해 실제 전체 건수 확인
-      const countPipeline: Document[] = [
-        ...pipelineForCount(pipelineArr),
-        { $count: 'total' },
-      ];
-      const [countResult, docsResult]: [Document[], Document[]] = await Promise.all([
-        db.collection(collection).aggregate(convertOid(countPipeline) as Document[], { maxTimeMS: DB_TIMEOUT_MS }).toArray(),
-        db.collection(collection).aggregate(convertOid(execPipeline) as Document[], { maxTimeMS: DB_TIMEOUT_MS }).toArray(),
-      ]);
-      totalCount = (countResult[0]?.total as number) ?? docsResult.length;
-      docs = docsResult;
-    } else {
-      // 로직 $limit이거나 $limit 없음 → 단일 쿼리, 결과 건수가 곧 전체 건수
-      docs = await db.collection(collection).aggregate(convertOid(execPipeline) as Document[], { maxTimeMS: DB_TIMEOUT_MS }).toArray();
-      totalCount = docs.length;
-    }
+    const [countResult, docsResult]: [Document[], Document[]] = await Promise.all([
+      db.collection(collection).aggregate(convertOid(countPipeline) as Document[], { maxTimeMS: DB_TIMEOUT_MS }).toArray(),
+      db.collection(collection).aggregate(convertOid(execPipeline) as Document[], { maxTimeMS: DB_TIMEOUT_MS }).toArray(),
+    ]);
+    const totalCount: number = (countResult[0]?.total as number) ?? docsResult.length;
+    const docs: Document[] = docsResult;
 
     const dbTimeMs: number = Date.now() - dbStart;
 
+    // 내보내기 재실행을 위해 원본(주입 전) pipeline을 저장
     const aggParams: QueryParams = { database: targetDb, collection, filter: {}, projection: {}, pipeline: pipelineArr };
     if (requestId) queryParamsStore.set(requestId, aggParams);
     queryParamsStore.set('__latest__', aggParams);
@@ -553,7 +577,12 @@ app.post('/db-aggregate', async (req: Request<object, object, DbAggregateBody>, 
     if (totalCount === 0) {
       return res.json({ count: 0, data: [], dbTimeMs, message: '조회된 데이터가 없습니다. 추가 쿼리 없이 즉시 이 메시지를 사용자에게 전달하라.' });
     }
-    return res.json({ count: totalCount, data: docs, dbTimeMs });
+    const body: Record<string, unknown> = { count: totalCount, data: docs, dbTimeMs };
+    if (autoLimited) {
+      body.autoLimitedTo = limit;
+      body.message = `pipeline 끝에 $limit 이 없어 서버가 자동으로 { $limit: ${limit} } 을 부착했습니다. 총 ${totalCount}건 중 상위 ${docs.length}건만 반환. 재쿼리 금지, 이 결과 그대로 사용자에게 응답하세요.`;
+    }
+    return res.json(capForToolOutput(body));
   } catch (err) {
     if (isTimeoutError(err)) {
       console.warn(`${ts()} [타임아웃] ${DB_TIMEOUT_MSG} — ${collection}`);
@@ -583,7 +612,7 @@ app.post('/db-export', async (req: Request<object, object, DbExportBody>, res: R
       const exportPipeline: Document[] = withSensitiveFieldsUnset(pipelineWithoutTerminalLimit(pipeline));
       docs = await db
         .collection(collection)
-        .aggregate(exportPipeline, { maxTimeMS: DB_TIMEOUT_MS })
+        .aggregate(convertOid(exportPipeline) as Document[], { maxTimeMS: DB_TIMEOUT_MS })
         .toArray();
     } else {
       const safeProjection: Projection = { ...projection };

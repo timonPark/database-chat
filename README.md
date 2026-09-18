@@ -48,6 +48,16 @@ The LLM never touches the database directly. It calls internal HTTP endpoints (`
 npx create-database-chat my-app
 ```
 
+> **⚠️ The currently published 0.1.0 is missing the executable bit on `dist/index.js`, so the command above fails with `Permission denied`.** The next patch release fixes this. In the meantime, build from source:
+
+```bash
+git clone https://github.com/timonPark/database-chat.git
+cd database-chat
+npm install
+npm run build             # produces an executable dist/index.js
+node dist/index.js my-app
+```
+
 An interactive prompt lets you pick the LLM provider and database.
 
 ```
@@ -376,10 +386,13 @@ When adding a new combination, use the docs in each folder as reference for the 
 
 ## Adding a new combination template (contributing)
 
+> For running a local clone build, see [Quick start → Create the project](#create-the-project).
+
 1. Consult `1.llm_provider/<llm>/` and `2.database/<db>/` to learn the integration.
 2. Create `templates/<llm>-<db>/` and add the required files.
 3. Add `'<llm>-<db>'` to `AVAILABLE_COMBOS` in `src/index.ts`.
-4. Rebuild with `npm run build`.
+4. Rebuild with `npm run build` (the build script sets the executable bit on `dist/index.js` automatically).
+5. Verify end-to-end: `node dist/index.js my-app` → `npm run schema` → `npm start`.
 
 ```typescript
 // src/index.ts

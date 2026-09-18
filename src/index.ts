@@ -43,6 +43,7 @@ const AVAILABLE_COMBOS = new Set([
   'codex-postgresql',
   'codex-mssql',
   'codex-oracle',
+  'gemini-mongodb',
 ]);
 
 // ── 유틸 ─────────────────────────────────────────────────────────────────────
@@ -338,22 +339,44 @@ echo ""
 
 
   } else if (provider === 'gemini') {
-    const apiBlock = `api_key = os.environ['GEMINI_API_KEY']
-model   = os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash')
-url     = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}'
-body    = json.dumps({'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'maxOutputTokens': 8192}}).encode()
-req     = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'})
-text    = json.loads(urllib.request.urlopen(req).read())['candidates'][0]['content']['parts'][0]['text']`;
+    llmCall = `echo "[3/3] Gemini(agy)로 인덱스 생성 중..."
+AGY_BIN="\${AGY_CLI_PATH:-}"
+if [ -z "\$AGY_BIN" ]; then
+  if command -v agy >/dev/null 2>&1; then
+    AGY_BIN="agy"
+  elif [ -x "/opt/homebrew/bin/agy" ]; then
+    AGY_BIN="/opt/homebrew/bin/agy"
+  fi
+fi
 
-    llmCall = `echo "[3/3] Gemini로 인덱스 생성 중..."
+if [ -z "\$AGY_BIN" ]; then
+  echo "오류: Antigravity CLI(agy)를 찾을 수 없습니다."
+  echo "      brew install --cask antigravity-cli 로 설치하거나 AGY_CLI_PATH를 설정하세요."
+  exit 1
+fi
+
+GEMINI_MODEL_VALUE="\${GEMINI_MODEL:-gemini-3.8-flash-medium}"
+GEMINI_PRINT_TIMEOUT_VALUE="\${GEMINI_PRINT_TIMEOUT:-5m}"
+
+"\$AGY_BIN" -p "$(cat /tmp/_schema_prompt.txt)" \\
+  --dangerously-skip-permissions \\
+  --output-format text \\
+  --model "\$GEMINI_MODEL_VALUE" \\
+  --print-timeout "\$GEMINI_PRINT_TIMEOUT_VALUE" > /tmp/_schema_gemini.out 2> /tmp/_schema_gemini.log
+
 python3 - << 'PYTHON'
-import os, json, urllib.request, re, sys
-with open('/tmp/_schema_prompt.txt') as f:
-    prompt = f.read()
-${apiBlock}
+import json, re, sys
+try:
+    with open('/tmp/_schema_gemini.out') as f:
+        text = f.read()
+except FileNotFoundError:
+    with open('/tmp/_schema_gemini.log') as f:
+        text = f.read()
 match = re.search(r'\\{[\\s\\S]*\\}', text)
 if not match:
-    print('오류: JSON 응답 파싱 실패', file=sys.stderr); sys.exit(1)
+    print('오류: JSON 응답 파싱 실패', file=sys.stderr)
+    print(text, file=sys.stderr)
+    sys.exit(1)
 result = json.loads(match.group())
 with open('index.md', 'w') as f: f.write(result['index'])
 with open('${mappingFile}', 'w') as f: f.write(result['mapping'])

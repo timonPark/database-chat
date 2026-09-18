@@ -48,6 +48,16 @@ LLM은 직접 DB에 접근하지 않고 서버 내부 HTTP 엔드포인트(`/db-
 npx create-database-chat my-app
 ```
 
+> **⚠️ 현재 npm에 배포된 0.1.0은 `dist/index.js`에 실행권한이 빠져 있어 위 명령이 `Permission denied`로 실패합니다.** 다음 패치가 배포되면 정상 동작합니다. 지금 바로 써 보려면 아래 소스 빌드 절차를 사용하세요.
+
+```bash
+git clone https://github.com/timonPark/database-chat.git
+cd database-chat
+npm install
+npm run build             # dist/index.js를 실행 가능한 상태로 생성
+node dist/index.js my-app
+```
+
 대화형 프롬프트에서 LLM 제공자와 데이터베이스를 선택합니다.
 
 ```
@@ -376,10 +386,13 @@ await client.connect();
 
 ## 새 조합 템플릿 추가 (기여)
 
+> clone 후 로컬 빌드 실행 방법은 상단 [빠른 시작 → 프로젝트 생성](#프로젝트-생성) 참고.
+
 1. `1.llm_provider/<llm>/`과 `2.database/<db>/` 문서를 참고해 구현 방법을 파악합니다.
 2. `templates/<llm>-<db>/` 폴더를 생성하고 필요한 파일을 작성합니다.
 3. `src/index.ts`의 `AVAILABLE_COMBOS`에 `'<llm>-<db>'`를 추가합니다.
-4. `npm run build`로 재빌드합니다.
+4. `npm run build` 로 재빌드합니다 (빌드 스크립트가 `dist/index.js`에 자동으로 실행권한을 세팅합니다).
+5. `node dist/index.js my-app`으로 스캐폴딩 → `npm run schema` → `npm start`까지 검증합니다.
 
 ```typescript
 // src/index.ts

@@ -6,6 +6,8 @@
   <title>Codex MySQL Chat</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -53,6 +55,32 @@
     }
 
     #table-info-btn:hover { background: #1a3a5a; color: #b0d4f0; }
+
+    .header-actions { display: flex; gap: 8px; }
+
+    #erd-btn {
+      padding: 5px 14px;
+      border-radius: 8px;
+      border: 1px solid #2a4a6a;
+      background: transparent;
+      color: #7ab3e0;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, opacity 0.15s;
+      white-space: nowrap;
+    }
+    #erd-btn:hover:not(:disabled) { background: #1a3a5a; color: #b0d4f0; }
+    #erd-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #erd-modal .modal-box { width: min(96vw, 1400px); max-height: 92vh; }
+    #erd-canvas {
+      flex: 1;
+      overflow: auto;
+      background: #0d1729;
+      padding: 12px;
+    }
+    #erd-canvas svg { max-width: none; height: auto; }
+    .erd-empty { padding: 24px; color: #7ab3e0; text-align: center; font-size: 0.9rem; }
 
     /* 모달 */
     .modal-overlay {
@@ -446,8 +474,21 @@
       <h1>Codex MySQL Chat</h1>
       <div class="updated-at" id="updated-at"></div>
     </div>
-    <button id="table-info-btn">테이블 정보</button>
+    <div class="header-actions">
+      <button id="erd-btn" title="먼저 pnpm run erd 를 실행하세요" disabled>ERD 보기</button>
+      <button id="table-info-btn">테이블 정보</button>
+    </div>
   </header>
+
+  <div id="erd-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span>ERD (테이블 관계 다이어그램)</span>
+        <button class="modal-close" id="erd-modal-close">✕</button>
+      </div>
+      <div id="erd-canvas"></div>
+    </div>
+  </div>
 
   <div id="table-modal" class="modal-overlay" style="display:none">
     <div class="modal-box">
@@ -561,6 +602,76 @@
     });
 
     modalSearchInput.addEventListener('input', (e) => filterModalRows(e.target.value));
+
+    // ── ERD 모달 ─────────────────────────────────────────────────────────────
+    const erdBtn = document.getElementById('erd-btn');
+    const erdModal = document.getElementById('erd-modal');
+    const erdCanvas = document.getElementById('erd-canvas');
+    let erdRendered = false;
+    let erdContent = null;
+
+    // Mermaid 초기화 (다크 테마)
+    if (window.mermaid) {
+      window.mermaid.initialize({
+        startOnLoad: false,
+        theme: 'dark',
+        securityLevel: 'loose',
+        er: { useMaxWidth: false },
+      });
+    }
+
+    // 로드 시 ERD 가용 여부 확인
+    (async () => {
+      try {
+        const res = await fetch('/meta/erd');
+        const data = await res.json();
+        if (data.available && data.content) {
+          erdContent = data.content;
+          erdBtn.disabled = false;
+          erdBtn.title = 'ERD 다이어그램 보기';
+        } else {
+          erdBtn.disabled = true;
+          erdBtn.title = '먼저 pnpm run erd 를 실행하세요';
+        }
+      } catch (err) {
+        erdBtn.disabled = true;
+        erdBtn.title = 'ERD 데이터를 가져오지 못했습니다: ' + err.message;
+      }
+    })();
+
+    erdBtn.addEventListener('click', async () => {
+      if (erdBtn.disabled || !erdContent) return;
+      erdModal.style.display = 'flex';
+      if (erdRendered) return;
+      erdCanvas.innerHTML = '<div class="erd-empty">렌더링 중... (엔티티가 많으면 최대 수십 초 걸릴 수 있습니다)</div>';
+      try {
+        const { svg } = await window.mermaid.render('erd-svg-' + Date.now(), erdContent);
+        erdCanvas.innerHTML = svg;
+        erdRendered = true;
+        const svgEl = erdCanvas.querySelector('svg');
+        if (svgEl && window.svgPanZoom) {
+          svgEl.style.width = '100%';
+          svgEl.style.height = '85vh';
+          window.svgPanZoom(svgEl, {
+            zoomEnabled: true,
+            controlIconsEnabled: true,
+            fit: true,
+            center: true,
+            minZoom: 0.1,
+            maxZoom: 20,
+          });
+        }
+      } catch (err) {
+        erdCanvas.innerHTML = '<div class="erd-empty">ERD 렌더링 실패: ' + (err.message || err) + '</div>';
+      }
+    });
+
+    document.getElementById('erd-modal-close').addEventListener('click', () => {
+      erdModal.style.display = 'none';
+    });
+    erdModal.addEventListener('click', (e) => {
+      if (e.target === erdModal) erdModal.style.display = 'none';
+    });
 
     document.getElementById('modal-close-btn').addEventListener('click', () => {
       tableModal.style.display = 'none';

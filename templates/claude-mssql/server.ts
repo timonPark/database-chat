@@ -342,6 +342,19 @@ app.get('/meta/table-info', (_req: Request, res: Response) => {
   res.json({ content: loadTableIndex() });
 });
 
+app.get('/meta/erd', (_req: Request, res: Response) => {
+  const erdPath: string = path.resolve('erd.mmd');
+  if (!fs.existsSync(erdPath)) {
+    return res.json({ available: false, content: null });
+  }
+  try {
+    const content: string = fs.readFileSync(erdPath, 'utf-8');
+    return res.json({ available: true, content });
+  } catch (err) {
+    return res.json({ available: false, content: null, error: (err as Error).message });
+  }
+});
+
 app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Response) => {
   const { requestId, sql: sqlStr, limit = 20 } = req.body;
 

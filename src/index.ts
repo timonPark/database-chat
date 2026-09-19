@@ -229,6 +229,7 @@ async function generateMinimalPackageJson(
     scripts: {
       seed:   'bash scripts/seed.sh',
       schema: 'bash scripts/generate-schema.sh',
+      erd:    'npx --no-install tsx scripts/generate-erd.ts',
     },
     dependencies: deps,
   };
@@ -483,6 +484,22 @@ async function addSchemaToPackageScripts(targetDir: string): Promise<void> {
   const raw = await readFile(pkgPath, 'utf-8');
   const pkg = JSON.parse(raw) as { scripts?: Record<string, string> };
   pkg.scripts = { ...pkg.scripts, schema: 'bash scripts/generate-schema.sh' };
+  await writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+}
+
+async function generateErdScript(targetDir: string, database: string): Promise<void> {
+  const erdSrc = path.join(SEEDS_DIR, database, 'generate-erd.ts');
+  if (!existsSync(erdSrc)) return;
+  const scriptsDir = path.join(targetDir, 'scripts');
+  await mkdir(scriptsDir, { recursive: true });
+  await cp(erdSrc, path.join(scriptsDir, 'generate-erd.ts'));
+}
+
+async function addErdToPackageScripts(targetDir: string): Promise<void> {
+  const pkgPath = path.join(targetDir, 'package.json');
+  const raw = await readFile(pkgPath, 'utf-8');
+  const pkg = JSON.parse(raw) as { scripts?: Record<string, string> };
+  pkg.scripts = { ...pkg.scripts, erd: 'npx --no-install tsx scripts/generate-erd.ts' };
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 }
 
@@ -1336,6 +1353,7 @@ async function main(): Promise<void> {
       await generateMinimalPackageJson(targetDir, database, projectName);
       await generateEnvExample(targetDir, database);
       await generateSchemaScript(targetDir, database, provider);
+      await generateErdScript(targetDir, database);
       await generateReadme(targetDir, projectName, provider, database, dbMode, withSeed, 'npm', false);
       await generateInstallScripts(targetDir, projectName, provider, database, dbMode);
       await generateStartScripts(targetDir, projectName);
@@ -1466,6 +1484,10 @@ async function main(): Promise<void> {
   // generate-schema.ts 복사 + package.json에 schema 스크립트 추가
   await generateSchemaScript(targetDir, database, provider);
   await addSchemaToPackageScripts(targetDir);
+
+  // generate-erd.ts 복사 + package.json에 erd 스크립트 추가
+  await generateErdScript(targetDir, database);
+  await addErdToPackageScripts(targetDir);
 
   // README.md 생성
   await generateReadme(targetDir, projectName, provider, database, dbMode, withSeed, pm, true);

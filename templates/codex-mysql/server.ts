@@ -145,6 +145,7 @@ ${buildTableGuide()}
 - EXPLAIN SELECT ... 로 실행 계획 확인 가능 (type=ALL 발견 시 인덱스 추가 안내)
 - 단순 WHERE·ORDER BY는 /db-query, JOIN·GROUP BY·서브쿼리·HAVING은 /db-aggregate
 - LIMIT은 반드시 ${limit} 사용. 엑셀 내보내기는 동일 쿼리를 그대로 실행함
+- 숫자로도 문자열로도 저장 가능한 값(전화번호·사번·주민등록번호 등)은 우선 값 그대로 조회한 뒤 결과가 0건이면 타입을 반대로 바꿔 한 번 더 재시도한다. 예) WHERE phone = '01012345678' 로 0건이면 WHERE phone = 01012345678 (또는 CAST(phone AS UNSIGNED) = 01012345678) 로 재조회. 재조회에서도 0건이면 "조회된 데이터가 없습니다"
 - 결과 없으면 즉시 "조회된 데이터가 없습니다"
 - 오류 시 원인 설명 후 쿼리 수정하여 재시도`;
 }

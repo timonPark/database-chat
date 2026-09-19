@@ -263,16 +263,69 @@ async function generateSchemaScript(targetDir: string, database: string, provide
   await writeFile(path.join(scriptsDir, 'generate-schema.sh'), sh, { mode: 0o755 });
 }
 
-function buildGenerateSchemaSh(database: string, provider: string): string {
-  const isMongo     = database === 'mongodb';
-  const mappingFile = isMongo ? 'collection-mapping.md' : 'table-mapping.md';
-  const dbEnvKey    = database === 'oracle' ? 'DB_SERVICE_NAME' : 'DB_DATABASE';
-  const entityTag   = isMongo ? 'COLLECTION' : 'TABLE';
-  const entityLabel = isMongo ? '컬렉션' : '테이블';
-  const entityDir   = isMongo ? 'collections' : 'tables';
-  const entityKey   = isMongo ? 'collections' : 'tables';
+interface EntityConfig {
+  database: string;
+  isMongo: boolean;
+  mappingFile: string;      // collection-mapping.md / table-mapping.md
+  dbEnvKey: string;         // DB_DATABASE / DB_SERVICE_NAME
+  entityTag: string;        // COLLECTION / TABLE
+  entityLabel: string;      // 컬렉션 / 테이블
+  entityDir: string;        // collections / tables
+  entityKey: string;        // JSON key for gemini/codex 응답
+  dbDisplayName: string;    // MongoDB / MySQL / PostgreSQL / Oracle / MSSQL
+  fieldLabel: string;       // 필드 / 컬럼
+  relatedLabel: string;     // 관련 컬렉션 / 관련 테이블
+  idFieldExample: string;   // 마크다운 예시 로우
+}
 
-  // 공통 헤더: TS로 스키마 추출 → Python으로 프롬프트에 주입
+function getEntityConfig(database: string): EntityConfig {
+  const isMongo = database === 'mongodb';
+  const dbDisplayNames: Record<string, string> = {
+    mongodb: 'MongoDB', mysql: 'MySQL', postgresql: 'PostgreSQL',
+    oracle: 'Oracle', mssql: 'MSSQL',
+  };
+  return {
+    database,
+    isMongo,
+    mappingFile:   isMongo ? 'collection-mapping.md' : 'table-mapping.md',
+    dbEnvKey:      database === 'oracle' ? 'DB_SERVICE_NAME' : 'DB_DATABASE',
+    entityTag:     isMongo ? 'COLLECTION' : 'TABLE',
+    entityLabel:   isMongo ? '컬렉션' : '테이블',
+    entityDir:     isMongo ? 'collections' : 'tables',
+    entityKey:     isMongo ? 'collections' : 'tables',
+    dbDisplayName: dbDisplayNames[database] ?? database,
+    fieldLabel:    isMongo ? '필드' : '컬럼',
+    relatedLabel:  isMongo ? '관련 컬렉션' : '관련 테이블',
+    // 백틱은 heredoc(비인용) 안에서 command substitution 으로 해석되므로 반드시 \` 로 이스케이프.
+    idFieldExample: isMongo
+      ? '| \\`_id\\` | ObjectId | 고유 식별자 |'
+      : '| \\`id\\`  | int      | 고유 식별자 |',
+  };
+}
+
+// #87: provider별 default 모델. 모델 목록은 스크립트 실행 시점에 CLI 로 조회하고
+// 조회 실패 시 이 default 하나만 후보로 노출한다 (하드코딩 방지).
+const PROVIDER_DEFAULT_MODEL: Record<string, string> = {
+  claude: 'claude-haiku-4-5-20251001',
+  gemini: 'gemini-3.8-flash-medium',
+  codex:  'gpt-5.6-luna',
+};
+
+const PROVIDER_MODEL_ENV: Record<string, string> = {
+  claude: 'CLAUDE_MODEL',
+  gemini: 'GEMINI_MODEL',
+  codex:  'CODEX_MODEL',
+};
+
+function buildGenerateSchemaSh(database: string, provider: string): string {
+  const cfg = getEntityConfig(database);
+  const { mappingFile, dbEnvKey, entityTag, entityLabel, entityDir, entityKey,
+          dbDisplayName, fieldLabel, relatedLabel, idFieldExample } = cfg;
+
+  const defaultModel = PROVIDER_DEFAULT_MODEL[provider] ?? '';
+  const modelEnvKey = PROVIDER_MODEL_ENV[provider] ?? 'MODEL';
+
+  // ── 헤더 ────────────────────────────────────────────────────────────────────
   const header = `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -288,64 +341,13 @@ fi
 
 TODAY=$(date +%Y-%m-%d)
 DB_NAME=$(grep -v '^#' .env | grep ${dbEnvKey} | cut -d= -f2 | tr -d ' \\r')
-
-echo "[1/3] DB 스키마 추출 중..."
-SCHEMA=$(npx --no-install tsx scripts/extract-schema.ts)
-ENTITY_COUNT=$(echo "$SCHEMA" | grep -c "^\\[${entityTag}\\]" || true)
-echo "      ${entityLabel} \${ENTITY_COUNT}개 추출 완료"
-echo ""
-
-echo "[2/3] 프롬프트 생성 중..."
-python3 -c "
-import sys
-with open('scripts/generate-schema-prompt.md') as f:
-    p = f.read()
-p = p.replace('{{SCHEMA}}', sys.argv[1])
-p = p.replace('{{DB_DATABASE}}', sys.argv[2])
-p = p.replace('{{TODAY}}', sys.argv[3])
-print(p)
-" "$SCHEMA" "$DB_NAME" "$TODAY" > /tmp/_schema_prompt.txt
-echo "      프롬프트 생성 완료"
-echo ""
-
 `;
 
-  // LLM별 호출
-  let llmCall: string;
-
-  if (provider === 'claude') {
-    llmCall = `echo "[3/3] Claude로 인덱스 생성 중... (${entityLabel} \${ENTITY_COUNT}개)"
-mkdir -p ${entityDir}
-
-claude -p "$(cat /tmp/_schema_prompt.txt)" \\
-  --allowedTools Bash \\
-  --model "\${CLAUDE_MODEL:-claude-haiku-4-5-20251001}" > /tmp/_schema_claude.log 2>&1 &
-_CLAUDE_PID=$!
-
-_SEEN=""
-_DONE=0
-while kill -0 "$_CLAUDE_PID" 2>/dev/null; do
-  sleep 0.3
-  for _F in ${entityDir}/*.md; do
-    [ -f "$_F" ] || continue
-    _NAME=$(basename "$_F" .md)
-    case "$_SEEN" in *"|$_NAME|"*) continue ;; esac
-    _SEEN="$_SEEN|$_NAME|"
-    _DONE=$((_DONE + 1))
-    printf "      [%d/%s] %s 완료\\n" "$_DONE" "\${ENTITY_COUNT}" "$_NAME"
-  done
-done
-wait "$_CLAUDE_PID" || { echo ""; echo "오류 발생:"; cat /tmp/_schema_claude.log; exit 1; }
-
-echo ""
-[ -f "index.md" ]       && echo "  ✔ index.md 생성 완료"
-[ -f "${mappingFile}" ] && echo "  ✔ ${mappingFile} 생성 완료"
-[ -d "${entityDir}" ]   && echo "  ✔ ${entityDir}/ 생성 완료 (\${_DONE}개)"`;
-
-
-  } else if (provider === 'gemini') {
-    llmCall = `echo "[3/3] Gemini(agy)로 인덱스 생성 중..."
-AGY_BIN="\${AGY_CLI_PATH:-}"
+  // ── provider별 CLI 감지 (스크립트 상단에서 1회 실행) ────────────────────────
+  const providerCliDetect = provider === 'claude'
+    ? `# Claude CLI 는 PATH 기반. 별도 감지 없음.\n`
+    : provider === 'gemini'
+    ? `AGY_BIN="\${AGY_CLI_PATH:-}"
 if [ -z "\$AGY_BIN" ]; then
   if command -v agy >/dev/null 2>&1; then
     AGY_BIN="agy"
@@ -353,24 +355,316 @@ if [ -z "\$AGY_BIN" ]; then
     AGY_BIN="/opt/homebrew/bin/agy"
   fi
 fi
-
 if [ -z "\$AGY_BIN" ]; then
   echo "오류: Antigravity CLI(agy)를 찾을 수 없습니다."
   echo "      brew install --cask antigravity-cli 로 설치하거나 AGY_CLI_PATH를 설정하세요."
   exit 1
 fi
-
-GEMINI_MODEL_VALUE="\${GEMINI_MODEL:-gemini-3.8-flash-medium}"
 GEMINI_PRINT_TIMEOUT_VALUE="\${GEMINI_PRINT_TIMEOUT:-5m}"
+`
+    : `CODEX_BIN="\${CODEX_CLI_PATH:-}"
+if [ -z "\$CODEX_BIN" ]; then
+  if command -v codex >/dev/null 2>&1; then
+    CODEX_BIN="codex"
+  elif [ -x "/Applications/ChatGPT.app/Contents/Resources/codex" ]; then
+    CODEX_BIN="/Applications/ChatGPT.app/Contents/Resources/codex"
+  fi
+fi
+if [ -z "\$CODEX_BIN" ]; then
+  echo "오류: Codex CLI를 찾을 수 없습니다."
+  echo "      npm install -g @openai/codex 로 설치하거나 CODEX_CLI_PATH를 설정하세요."
+  exit 1
+fi
+`;
 
-"\$AGY_BIN" -p "$(cat /tmp/_schema_prompt.txt)" \\
-  --dangerously-skip-permissions \\
-  --output-format text \\
-  --model "\$GEMINI_MODEL_VALUE" \\
-  --print-timeout "\$GEMINI_PRINT_TIMEOUT_VALUE" > /tmp/_schema_gemini.out 2> /tmp/_schema_gemini.log
+  // ── #87: AI 모델 선택 — provider CLI 로 런타임 조회 + fallback ─────────────
+  // gemini 만 agy models 조회를 시도. claude/codex 는 default + 직접 입력.
+  const modelQuery = provider === 'gemini'
+    ? `echo "  (agy models 로 지원 모델 조회 중...)"
+while IFS= read -r _line; do
+  _model=\$(echo "\$_line" | awk '{print \$1}' | tr -d ' \\t\\r')
+  case "\$_model" in
+    gemini-*) _MODELS+=("\$_model") ;;
+  esac
+done < <("\$AGY_BIN" models 2>/dev/null || true)`
+    : `# ${provider === 'claude' ? 'Claude' : 'Codex'} CLI 는 안정적인 list-models 명령을 제공하지 않아 조회 없이 default + 직접 입력만 노출.`;
 
-python3 - << 'PYTHON'
-import json, re, sys
+  const modelSelection = `
+# ── AI 모델 선택 (#87) — 런타임 CLI 조회 + fallback ─────────────────────────
+_DEFAULT_MODEL="${defaultModel}"
+_MODELS=()
+
+${modelQuery}
+
+# 조회 결과가 없으면 default 하나만 후보로 둔다.
+if [ \${#_MODELS[@]} -eq 0 ]; then
+  _MODELS+=("\$_DEFAULT_MODEL")
+fi
+
+echo "사용할 AI 모델을 선택하세요:"
+_idx=0
+for _M in "\${_MODELS[@]}"; do
+  _idx=\$((_idx + 1))
+  _marker=""
+  [ "\$_M" = "\$_DEFAULT_MODEL" ] && _marker=" (default)"
+  echo "  \$_idx) \$_M\$_marker"
+done
+_MAX=\$((_idx + 1))
+echo "  \$_MAX) 직접 입력"
+
+read -rp "선택 [1-\$_MAX, default=1]: " MODEL_CHOICE
+MODEL_CHOICE=\${MODEL_CHOICE:-1}
+if ! [[ "\$MODEL_CHOICE" =~ ^[0-9]+\$ ]] || [ "\$MODEL_CHOICE" -lt 1 ] || [ "\$MODEL_CHOICE" -gt "\$_MAX" ]; then
+  echo "잘못된 선택: \$MODEL_CHOICE"; exit 1
+fi
+if [ "\$MODEL_CHOICE" = "\$_MAX" ]; then
+  read -rp "모델명: " MODEL_VALUE
+  if [ -z "\$MODEL_VALUE" ]; then echo "모델명이 비어있습니다. 종료."; exit 1; fi
+else
+  MODEL_VALUE="\${_MODELS[\$((MODEL_CHOICE - 1))]}"
+fi
+export ${modelEnvKey}="\$MODEL_VALUE"
+echo "  선택된 모델: \$MODEL_VALUE"
+echo ""
+`;
+
+  // ── #83: 업데이트 범위 선택 ──────────────────────────────────────────────────
+  const modeSelection = `
+# ── 업데이트 범위 선택 (#83) ──────────────────────────────────────────────────
+echo "업데이트 범위를 선택하세요:"
+echo "  1) 전체 업데이트 — 모든 ${entityLabel} 재생성 + index.md/${mappingFile} 갱신"
+echo "  2) 부분 업데이트 — ${entityDir}/ 폴더에 아직 .md 없는 ${entityLabel}만"
+echo "  3) 부분 업데이트 — 직접 지정한 ${entityLabel}만"
+read -rp "선택 [1-3, default=1]: " MODE_CHOICE
+MODE_CHOICE=\${MODE_CHOICE:-1}
+
+CUSTOM_NAMES=""
+case "\$MODE_CHOICE" in
+  1) MODE="full" ;;
+  2) MODE="partial-missing" ;;
+  3)
+    MODE="partial-custom"
+    read -rp "${entityLabel}명 입력 (공백 또는 쉼표 구분): " CUSTOM_NAMES
+    CUSTOM_NAMES=\$(echo "\$CUSTOM_NAMES" | tr ',' ' ' | tr -s ' ')
+    if [ -z "\$(echo "\$CUSTOM_NAMES" | tr -d ' ')" ]; then
+      echo "입력이 비어있습니다. 종료."; exit 1
+    fi
+    ;;
+  *) echo "잘못된 선택: \$MODE_CHOICE"; exit 1 ;;
+esac
+echo "  선택된 모드: \$MODE"
+echo ""
+`;
+
+  // ── 스키마 추출 + 모드 필터링 + 재생성 대상 삭제 + 10개 배치 분할 ─────────
+  const extractAndBatch = `
+# ── [1/3] 스키마 추출 ────────────────────────────────────────────────────────
+echo "[1/3] DB 스키마 추출 중..."
+SCHEMA=\$(npx --no-install tsx scripts/extract-schema.ts)
+_EXTRACTED_COUNT=\$(echo "\$SCHEMA" | grep -c "^\\[${entityTag}\\]" || true)
+echo "      ${entityLabel} \${_EXTRACTED_COUNT}개 추출 완료"
+
+if [ "\$MODE" != "full" ]; then
+  SCHEMA=\$(python3 - "\$SCHEMA" "\$MODE" "\$CUSTOM_NAMES" "${entityDir}" "${entityTag}" <<'PYEOF'
+import os, sys
+schema, mode, custom, entity_dir, tag = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+custom_set = set(n for n in custom.split() if n)
+blocks, current = [], []
+tag_prefix = f'[{tag}]'
+for line in schema.split('\\n'):
+    if line.startswith(tag_prefix):
+        if current:
+            blocks.append(current)
+        current = [line]
+    elif current:
+        current.append(line)
+if current:
+    blocks.append(current)
+
+def name_of(block):
+    header = block[0]
+    after = header.split(']', 1)[1].strip()
+    return after.split('|', 1)[0].strip()
+
+kept = []
+for b in blocks:
+    n = name_of(b)
+    if mode == 'partial-missing':
+        if not os.path.exists(f'{entity_dir}/{n}.md'):
+            kept.append(b)
+    elif mode == 'partial-custom':
+        if n in custom_set:
+            kept.append(b)
+print('\\n'.join('\\n'.join(b) for b in kept), end='')
+PYEOF
+)
+  ENTITY_COUNT=\$(echo "\$SCHEMA" | grep -c "^\\[${entityTag}\\]" || true)
+  echo "      필터링 후 대상 \${ENTITY_COUNT}개 (\${MODE})"
+  if [ "\$ENTITY_COUNT" -eq 0 ]; then
+    echo "      대상 ${entityLabel}이 없습니다. 종료."; exit 0
+  fi
+else
+  ENTITY_COUNT=\$_EXTRACTED_COUNT
+fi
+echo ""
+
+# ── 기존 .md 삭제 (재생성 대상만) ────────────────────────────────────────────
+mkdir -p ${entityDir}
+_REGEN_COUNT=0
+while IFS= read -r _NAME; do
+  [ -z "\$_NAME" ] && continue
+  if [ -f "${entityDir}/\${_NAME}.md" ]; then
+    rm -f "${entityDir}/\${_NAME}.md"
+    _REGEN_COUNT=\$((_REGEN_COUNT + 1))
+  fi
+done < <(echo "\$SCHEMA" | grep "^\\[${entityTag}\\]" | sed 's/^\\[${entityTag}\\] //' | awk -F'|' '{gsub(/ /, "", \$1); print \$1}')
+echo "      기존 .md 재생성 대상 \${_REGEN_COUNT}개 삭제"
+
+# ── [2/3] 10개 배치로 분할 ───────────────────────────────────────────────────
+BATCH_SIZE=10
+BATCH_DIR=\$(mktemp -d /tmp/_schema_batches.XXXXXX)
+python3 - "\$SCHEMA" "\$BATCH_DIR" "\$BATCH_SIZE" "${entityTag}" <<'PYEOF'
+import os, sys
+schema, out_dir, batch_size, tag = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+blocks, current = [], []
+tag_prefix = f'[{tag}]'
+for line in schema.split('\\n'):
+    if line.startswith(tag_prefix):
+        if current:
+            blocks.append('\\n'.join(current))
+        current = [line]
+    elif current:
+        current.append(line)
+if current:
+    blocks.append('\\n'.join(current))
+for i in range(0, len(blocks), batch_size):
+    batch = blocks[i:i+batch_size]
+    idx = i // batch_size + 1
+    with open(os.path.join(out_dir, f'batch_{idx:03d}.txt'), 'w') as f:
+        f.write('\\n'.join(batch))
+PYEOF
+BATCH_COUNT=\$(ls "\$BATCH_DIR" | wc -l | tr -d ' ')
+echo "[2/3] 배치 분할: 전체 \${BATCH_COUNT}개 (배치당 최대 \${BATCH_SIZE}개)"
+echo ""
+`;
+
+  // ── 공통: 배치별 markdown 형식 안내 문자열 ─────────────────────────────────
+  const perEntityMdFormat = `# <${entityLabel}명>
+
+> **database**: \\\`\${DB_NAME}\\\` | **건수**: N건
+
+## ${fieldLabel} 목록
+
+| ${fieldLabel}명 | 타입 | 설명 |
+|--------|------|------|
+${idFieldExample}
+| \\\`<${fieldLabel}명>\\\` | <타입> | 한글 설명 |
+
+## ${relatedLabel}
+
+- 관련 참조 관계 서술`;
+
+  const finalMdFormats = `## index.md 형식
+\\\`\\\`\\\`
+# DB ${entityLabel} 인덱스
+> **database**: \\\`\${DB_NAME}\\\` — N개 ${entityLabel} / M건
+> 최종 업데이트: \${TODAY}
+
+## ${entityLabel} 목록
+
+### 카테고리명
+| ${entityLabel}명 | 한글 설명 |
+|---------|---------|
+| \\\`${entityLabel}명\\\` | 설명 (N건) |
+\\\`\\\`\\\`
+
+## ${mappingFile} 형식
+\\\`\\\`\\\`
+# ${entityLabel} 자연어 매핑 정의서
+
+> **database**: \\\`\${DB_NAME}\\\`
+
+## 카테고리명
+| ${entityLabel}명 | 자연어 키워드 | 주요 ${fieldLabel} | 설명 |
+|---------|-------------|---------|------|
+| \\\`${entityLabel}명\\\` | 키워드1, 키워드2 | \\\`col1\\\`, \\\`col2\\\` | 설명 (N건) |
+\\\`\\\`\\\``;
+
+  // ── provider별 배치 호출 블록 ───────────────────────────────────────────────
+  let batchCall: string;
+  if (provider === 'claude') {
+    batchCall = `  cat > /tmp/_schema_batch_prompt.txt <<PROMPT_EOF
+아래는 ${dbDisplayName} 데이터베이스 \\\`\${DB_NAME}\\\`의 ${entityLabel} 정보 일부입니다:
+
+\\\`\\\`\\\`
+\${_BATCH_SCHEMA}
+\\\`\\\`\\\`
+
+위 ${entityLabel}들 각각에 대해 \\\`${entityDir}/<이름>.md\\\` 파일을 bash heredoc으로 현재 디렉토리에 작성하세요.
+index.md 와 ${mappingFile} 는 생성하지 마세요 (이후 별도 단계에서 처리합니다).
+
+## ${entityDir}/<이름>.md 형식
+
+\\\`\\\`\\\`
+${perEntityMdFormat}
+\\\`\\\`\\\`
+
+## 작성 지침
+- 각 ${fieldLabel}의 한글 설명은 이름과 타입을 참고해 자연스럽게 작성하세요
+- 반드시 mkdir -p ${entityDir} 후 각 ${entityLabel}마다 heredoc으로 파일 생성
+PROMPT_EOF
+
+  claude -p "\$(cat /tmp/_schema_batch_prompt.txt)" \\
+    --allowedTools Bash \\
+    --model "\$MODEL_VALUE" > /tmp/_schema_claude.log 2>&1 &
+  _CLAUDE_PID=\$!
+
+  _SEEN=""
+  while kill -0 "\$_CLAUDE_PID" 2>/dev/null; do
+    sleep 0.3
+    while IFS= read -r _NAME; do
+      [ -z "\$_NAME" ] && continue
+      [ -f "${entityDir}/\${_NAME}.md" ] || continue
+      case "\$_SEEN" in *"|\$_NAME|"*) continue ;; esac
+      _SEEN="\$_SEEN|\$_NAME|"
+      _TOTAL_DONE=\$((_TOTAL_DONE + 1))
+      printf "      [%d/%s] %s 완료\\n" "\$_TOTAL_DONE" "\$ENTITY_COUNT" "\$_NAME"
+    done <<< "\$_BATCH_NAMES"
+  done
+  wait "\$_CLAUDE_PID" || { echo ""; echo "배치 \${_BATCH_IDX} 오류:"; cat /tmp/_schema_claude.log; exit 1; }`;
+  } else if (provider === 'gemini') {
+    batchCall = `  cat > /tmp/_schema_batch_prompt.txt <<PROMPT_EOF
+아래는 ${dbDisplayName} 데이터베이스 \\\`\${DB_NAME}\\\`의 ${entityLabel} 정보 일부입니다:
+
+\\\`\\\`\\\`
+\${_BATCH_SCHEMA}
+\\\`\\\`\\\`
+
+위 ${entityLabel}들에 대해 다음 JSON 만 반환하세요 (다른 텍스트 없이):
+{
+  "${entityKey}": {
+    "<${entityLabel}명>": "<${entityLabel}명>.md 파일의 전체 markdown 내용",
+    ...
+  }
+}
+
+각 markdown 은 다음 형식:
+${perEntityMdFormat}
+
+index / mapping 등 다른 키는 넣지 마세요. ${entityKey} 만.
+PROMPT_EOF
+
+  "\$AGY_BIN" -p "\$(cat /tmp/_schema_batch_prompt.txt)" \\
+    --dangerously-skip-permissions \\
+    --output-format text \\
+    --model "\$MODEL_VALUE" \\
+    --print-timeout "\$GEMINI_PRINT_TIMEOUT_VALUE" > /tmp/_schema_gemini.out 2> /tmp/_schema_gemini.log
+
+  python3 - "\$_TOTAL_DONE" "\$ENTITY_COUNT" "${entityDir}" "${entityKey}" "${entityLabel}" <<'PYEOF'
+import json, re, sys, os
+prev_done, entity_count, entity_dir, entity_key, entity_label = (
+    int(sys.argv[1]), int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+)
 try:
     with open('/tmp/_schema_gemini.out') as f:
         text = f.read()
@@ -383,63 +677,61 @@ if not match:
     print(text, file=sys.stderr)
     sys.exit(1)
 result = json.loads(match.group())
-with open('index.md', 'w') as f: f.write(result['index'])
-with open('${mappingFile}', 'w') as f: f.write(result['mapping'])
-entities = result.get('${entityKey}', {})
+entities = result.get(entity_key, {})
 if not isinstance(entities, dict):
-    print('오류: ${entityKey} 응답 형식이 올바르지 않습니다.', file=sys.stderr)
+    print(f'오류: {entity_key} 응답 형식이 올바르지 않습니다.', file=sys.stderr)
     sys.exit(1)
-import os
-os.makedirs('${entityDir}', exist_ok=True)
-for index, (name, content) in enumerate(entities.items(), 1):
+os.makedirs(entity_dir, exist_ok=True)
+new_done = prev_done
+for name, content in entities.items():
     if not isinstance(name, str) or not isinstance(content, str):
-        print('오류: ${entityLabel} 상세 정보 형식이 올바르지 않습니다.', file=sys.stderr)
+        print(f'오류: {entity_label} 상세 정보 형식이 올바르지 않습니다.', file=sys.stderr)
         sys.exit(1)
     if not name or '/' in name or chr(92) in name or name in {'.', '..'}:
-        print(f'오류: 허용되지 않는 ${entityLabel}명입니다: {name}', file=sys.stderr)
+        print(f'오류: 허용되지 않는 {entity_label}명입니다: {name}', file=sys.stderr)
         sys.exit(1)
-    with open(os.path.join('${entityDir}', f'{name}.md'), 'w') as f:
+    with open(os.path.join(entity_dir, f'{name}.md'), 'w') as f:
         f.write(content)
-    print(f'      [{index}/{len(entities)}] {name}.md 생성 완료', flush=True)
-print('  ✔ index.md 생성 완료')
-print('  ✔ ${mappingFile} 생성 완료')
-print(f'  ✔ ${entityDir}/ 생성 완료 ({len(entities)}개)')
-PYTHON`;
+    new_done += 1
+    print(f'      [{new_done}/{entity_count}] {name} 완료', flush=True)
+with open('/tmp/_batch_done_count', 'w') as f:
+    f.write(str(new_done))
+PYEOF
+  _TOTAL_DONE=\$(cat /tmp/_batch_done_count)`;
   } else {
-    llmCall = `echo "[3/3] Codex로 인덱스 생성 중..."
-CODEX_BIN="\${CODEX_CLI_PATH:-}"
-if [ -z "\$CODEX_BIN" ]; then
-  if command -v codex >/dev/null 2>&1; then
-    CODEX_BIN="codex"
-  elif [ -x "/Applications/ChatGPT.app/Contents/Resources/codex" ]; then
-    CODEX_BIN="/Applications/ChatGPT.app/Contents/Resources/codex"
-  fi
-fi
+    batchCall = `  cat > /tmp/_schema_batch_prompt.txt <<PROMPT_EOF
+아래는 ${dbDisplayName} 데이터베이스 \\\`\${DB_NAME}\\\`의 ${entityLabel} 정보 일부입니다:
 
-if [ -z "\$CODEX_BIN" ]; then
-  echo "오류: Codex CLI를 찾을 수 없습니다."
-  echo "      npm install -g @openai/codex 로 설치하거나 CODEX_CLI_PATH를 설정하세요."
-  exit 1
-fi
+\\\`\\\`\\\`
+\${_BATCH_SCHEMA}
+\\\`\\\`\\\`
 
-CODEX_MODEL_VALUE="\${CODEX_MODEL:-gpt-5.6-luna}"
-if [ -n "\$CODEX_MODEL_VALUE" ]; then
+위 ${entityLabel}들에 대해 다음 JSON 만 반환하세요 (다른 텍스트 없이):
+{
+  "${entityKey}": {
+    "<${entityLabel}명>": "<${entityLabel}명>.md 파일의 전체 markdown 내용",
+    ...
+  }
+}
+
+각 markdown 은 다음 형식:
+${perEntityMdFormat}
+
+index / mapping 등 다른 키는 넣지 마세요. ${entityKey} 만.
+PROMPT_EOF
+
   "\$CODEX_BIN" exec \\
     --skip-git-repo-check \\
     --sandbox workspace-write \\
     --output-last-message /tmp/_schema_codex.out \\
-    --model "\$CODEX_MODEL_VALUE" \\
-    "$(cat /tmp/_schema_prompt.txt)" > /tmp/_schema_codex.log 2>&1
-else
-  "\$CODEX_BIN" exec \\
-    --skip-git-repo-check \\
-    --sandbox workspace-write \\
-    --output-last-message /tmp/_schema_codex.out \\
-    "$(cat /tmp/_schema_prompt.txt)" > /tmp/_schema_codex.log 2>&1
-fi
+    --model "\$MODEL_VALUE" \\
+    "\$(cat /tmp/_schema_batch_prompt.txt)" > /tmp/_schema_codex.log 2>&1
 
-python3 - << 'PYTHON'
-import json, re, sys
+  python3 - "\$_TOTAL_DONE" "\$ENTITY_COUNT" "${entityDir}" "${entityKey}" "${entityLabel}" <<'PYEOF'
+import json, re, sys, os
+prev_done, entity_count, entity_dir, entity_key, entity_label = (
+    int(sys.argv[1]), int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+)
 try:
     with open('/tmp/_schema_codex.out') as f:
         text = f.read()
@@ -452,31 +744,188 @@ if not match:
     print(text, file=sys.stderr)
     sys.exit(1)
 result = json.loads(match.group())
-with open('index.md', 'w') as f: f.write(result['index'])
-with open('${mappingFile}', 'w') as f: f.write(result['mapping'])
-entities = result.get('${entityKey}', {})
+entities = result.get(entity_key, {})
 if not isinstance(entities, dict):
-    print('오류: ${entityKey} 응답 형식이 올바르지 않습니다.', file=sys.stderr)
+    print(f'오류: {entity_key} 응답 형식이 올바르지 않습니다.', file=sys.stderr)
     sys.exit(1)
-import os
-os.makedirs('${entityDir}', exist_ok=True)
-for index, (name, content) in enumerate(entities.items(), 1):
+os.makedirs(entity_dir, exist_ok=True)
+new_done = prev_done
+for name, content in entities.items():
     if not isinstance(name, str) or not isinstance(content, str):
-        print('오류: ${entityLabel} 상세 정보 형식이 올바르지 않습니다.', file=sys.stderr)
+        print(f'오류: {entity_label} 상세 정보 형식이 올바르지 않습니다.', file=sys.stderr)
         sys.exit(1)
     if not name or '/' in name or chr(92) in name or name in {'.', '..'}:
-        print(f'오류: 허용되지 않는 ${entityLabel}명입니다: {name}', file=sys.stderr)
+        print(f'오류: 허용되지 않는 {entity_label}명입니다: {name}', file=sys.stderr)
         sys.exit(1)
-    with open(os.path.join('${entityDir}', f'{name}.md'), 'w') as f:
+    with open(os.path.join(entity_dir, f'{name}.md'), 'w') as f:
         f.write(content)
-    print(f'      [{index}/{len(entities)}] {name}.md 생성 완료', flush=True)
-print('  ✔ index.md 생성 완료')
-print('  ✔ ${mappingFile} 생성 완료')
-print(f'  ✔ ${entityDir}/ 생성 완료 ({len(entities)}개)')
-PYTHON`;
+    new_done += 1
+    print(f'      [{new_done}/{entity_count}] {name} 완료', flush=True)
+with open('/tmp/_batch_done_count', 'w') as f:
+    f.write(str(new_done))
+PYEOF
+  _TOTAL_DONE=\$(cat /tmp/_batch_done_count)`;
   }
 
-  return header + llmCall + '\nrm -f /tmp/_schema_prompt.txt\n';
+  const batchLoop = `
+# ── [3/3] 배치별 LLM 호출 ────────────────────────────────────────────────────
+echo "[3/3] LLM 호출 시작 (모델: \$MODEL_VALUE)"
+
+_TOTAL_DONE=0
+_BATCH_IDX=0
+for _BATCH_FILE in "\$BATCH_DIR"/batch_*.txt; do
+  _BATCH_IDX=\$((_BATCH_IDX + 1))
+  _BATCH_SCHEMA=\$(cat "\$_BATCH_FILE")
+  _BATCH_NAMES=\$(echo "\$_BATCH_SCHEMA" | grep "^\\[${entityTag}\\]" | sed 's/^\\[${entityTag}\\] //' | awk -F'|' '{gsub(/ /, "", \$1); print \$1}')
+  _BATCH_N=\$(echo "\$_BATCH_NAMES" | grep -c . || true)
+  echo "  ── 배치 \${_BATCH_IDX}/\${BATCH_COUNT} (\${_BATCH_N}개 ${entityLabel}) ──"
+
+${batchCall}
+done
+
+echo ""
+
+if [ "\$MODE" != "full" ]; then
+  echo "  ✔ ${entityDir}/ 부분 갱신 완료 (\${_TOTAL_DONE}개)"
+  echo "  ℹ  부분 업데이트 모드 — index.md · ${mappingFile} 는 건드리지 않았습니다."
+  rm -rf "\$BATCH_DIR" /tmp/_schema_batch_prompt.txt /tmp/_batch_done_count /tmp/_schema_*.log /tmp/_schema_*.out 2>/dev/null || true
+  exit 0
+fi
+`;
+
+  // ── provider별 최종 aggregation 블록 ────────────────────────────────────────
+  let finalCall: string;
+  if (provider === 'claude') {
+    finalCall = `cat > /tmp/_schema_final_prompt.txt <<FINAL_EOF
+아래는 ${dbDisplayName} 데이터베이스 \\\`\${DB_NAME}\\\`의 전체 ${entityLabel} 정보입니다:
+
+\\\`\\\`\\\`
+\${SCHEMA}
+\\\`\\\`\\\`
+
+${entityDir}/ 디렉토리에는 이미 각 ${entityLabel}별 상세 .md 파일이 생성돼있습니다.
+지금은 아래 2개 파일만 bash heredoc으로 현재 디렉토리에 작성하세요.
+
+1. \\\`index.md\\\` — 전체 ${entityLabel} 인덱스
+2. \\\`${mappingFile}\\\` — 자연어 키워드 매핑
+
+${finalMdFormats}
+
+## 작성 지침
+- ${entityLabel}을 도메인별로 카테고리화하세요
+- 한국어 키워드는 자연어 채팅 검색에 적합하게 작성하세요
+- 건수 기준 내림차순으로 정렬하세요
+FINAL_EOF
+
+claude -p "\$(cat /tmp/_schema_final_prompt.txt)" \\
+  --allowedTools Bash \\
+  --model "\$MODEL_VALUE" > /tmp/_schema_claude.log 2>&1 || { echo "최종 단계 오류:"; cat /tmp/_schema_claude.log; exit 1; }`;
+  } else if (provider === 'gemini') {
+    finalCall = `cat > /tmp/_schema_final_prompt.txt <<FINAL_EOF
+아래는 ${dbDisplayName} 데이터베이스 \\\`\${DB_NAME}\\\`의 전체 ${entityLabel} 정보입니다:
+
+\\\`\\\`\\\`
+\${SCHEMA}
+\\\`\\\`\\\`
+
+아래 JSON 만 반환하세요 (다른 텍스트 없이):
+{
+  "index": "index.md 파일의 전체 markdown 내용",
+  "mapping": "${mappingFile} 파일의 전체 markdown 내용"
+}
+
+${finalMdFormats}
+
+## 작성 지침
+- ${entityLabel}을 도메인별로 카테고리화하세요
+- 한국어 키워드는 자연어 채팅 검색에 적합하게 작성하세요
+- 건수 기준 내림차순으로 정렬하세요
+FINAL_EOF
+
+"\$AGY_BIN" -p "\$(cat /tmp/_schema_final_prompt.txt)" \\
+  --dangerously-skip-permissions \\
+  --output-format text \\
+  --model "\$MODEL_VALUE" \\
+  --print-timeout "\$GEMINI_PRINT_TIMEOUT_VALUE" > /tmp/_schema_gemini.out 2> /tmp/_schema_gemini.log
+
+python3 - "${mappingFile}" <<'PYEOF'
+import json, re, sys
+mapping_file = sys.argv[1]
+try:
+    with open('/tmp/_schema_gemini.out') as f:
+        text = f.read()
+except FileNotFoundError:
+    with open('/tmp/_schema_gemini.log') as f:
+        text = f.read()
+match = re.search(r'\\{[\\s\\S]*\\}', text)
+if not match:
+    print('오류: JSON 응답 파싱 실패', file=sys.stderr); print(text, file=sys.stderr); sys.exit(1)
+result = json.loads(match.group())
+with open('index.md', 'w') as f: f.write(result.get('index', ''))
+with open(mapping_file, 'w') as f: f.write(result.get('mapping', ''))
+PYEOF`;
+  } else {
+    finalCall = `cat > /tmp/_schema_final_prompt.txt <<FINAL_EOF
+아래는 ${dbDisplayName} 데이터베이스 \\\`\${DB_NAME}\\\`의 전체 ${entityLabel} 정보입니다:
+
+\\\`\\\`\\\`
+\${SCHEMA}
+\\\`\\\`\\\`
+
+아래 JSON 만 반환하세요 (다른 텍스트 없이):
+{
+  "index": "index.md 파일의 전체 markdown 내용",
+  "mapping": "${mappingFile} 파일의 전체 markdown 내용"
+}
+
+${finalMdFormats}
+
+## 작성 지침
+- ${entityLabel}을 도메인별로 카테고리화하세요
+- 한국어 키워드는 자연어 채팅 검색에 적합하게 작성하세요
+- 건수 기준 내림차순으로 정렬하세요
+FINAL_EOF
+
+"\$CODEX_BIN" exec \\
+  --skip-git-repo-check \\
+  --sandbox workspace-write \\
+  --output-last-message /tmp/_schema_codex.out \\
+  --model "\$MODEL_VALUE" \\
+  "\$(cat /tmp/_schema_final_prompt.txt)" > /tmp/_schema_codex.log 2>&1
+
+python3 - "${mappingFile}" <<'PYEOF'
+import json, re, sys
+mapping_file = sys.argv[1]
+try:
+    with open('/tmp/_schema_codex.out') as f:
+        text = f.read()
+except FileNotFoundError:
+    with open('/tmp/_schema_codex.log') as f:
+        text = f.read()
+match = re.search(r'\\{[\\s\\S]*\\}', text)
+if not match:
+    print('오류: JSON 응답 파싱 실패', file=sys.stderr); print(text, file=sys.stderr); sys.exit(1)
+result = json.loads(match.group())
+with open('index.md', 'w') as f: f.write(result.get('index', ''))
+with open(mapping_file, 'w') as f: f.write(result.get('mapping', ''))
+PYEOF`;
+  }
+
+  const finalAggregation = `
+# ── 최종 aggregation (전체 모드에서만) ───────────────────────────────────────
+echo "  ── 최종 단계: index.md · ${mappingFile} 생성 ──"
+
+${finalCall}
+
+echo ""
+[ -f "index.md" ]       && echo "  ✔ index.md 생성 완료"
+[ -f "${mappingFile}" ] && echo "  ✔ ${mappingFile} 생성 완료"
+[ -d "${entityDir}" ]   && echo "  ✔ ${entityDir}/ 생성 완료 (\${_TOTAL_DONE}개)"
+
+rm -rf "\$BATCH_DIR" /tmp/_schema_batch_prompt.txt /tmp/_schema_final_prompt.txt /tmp/_batch_done_count /tmp/_schema_*.log /tmp/_schema_*.out 2>/dev/null || true
+`;
+
+  return header + providerCliDetect + modelSelection + modeSelection + extractAndBatch + batchLoop + finalAggregation;
 }
 
 async function addSchemaToPackageScripts(targetDir: string): Promise<void> {

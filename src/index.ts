@@ -1530,12 +1530,14 @@ function buildDockerSeedPrompt(withSeed: boolean, pm: PackageManager = 'npm'): s
   docker compose -f docker/docker-compose.yml up -d${seedLine}
   cp .env.example .env
   ${pm} run schema
+  ${pm} run erd   # 실패해도 무시하고 계속 진행
 
 세부 지침:
 1. docker compose up 실행 후 DB 포트가 열릴 때까지 최대 30초 대기하세요.
 2. seed 완료 후 생성된 .credentials 파일에서 DB 접속 정보를 읽어 .env의 해당 항목에 채워주세요.
 3. .env 설정 완료 후 \`${pm} run schema\` 를 실행하면 index.md / table-mapping.md(collection-mapping.md) / tables/(collections/) 가 생성됩니다.
-4. 오류가 발생하면 원인을 파악해 해결한 후 계속 진행하세요.`;
+4. \`${pm} run erd\` 는 erd.mmd 를 생성합니다. 실패 시 warning 만 출력하고 다음 단계 계속 진행하세요.
+5. 오류가 발생하면 원인을 파악해 해결한 후 계속 진행하세요.`;
 }
 
 function buildAutoSetupPrompt(
@@ -1573,7 +1575,7 @@ async function runAutoSetup(
 ): Promise<void> {
   const spinner = p.spinner();
 
-  type Step = { label: string; fn: () => void; stream?: boolean };
+  type Step = { label: string; fn: () => void; stream?: boolean; nonFatal?: boolean };
   const steps: Step[] = [];
 
   if (dbMode === 'docker') {
@@ -1681,12 +1683,25 @@ async function runAutoSetup(
       },
       stream: true,
     });
+
+    // ERD 는 실패해도 앱 동작에 지장 없으므로 warning 후 계속 진행
+    steps.push({
+      label: 'ERD 다이어그램 생성 (erd)',
+      fn: () => {
+        const result = spawnSync(pm, ['run', 'erd'], { cwd: targetDir, stdio: 'inherit' });
+        if (result.status !== 0) {
+          throw new Error('ERD 생성 실패 (스키마 문서/카탈로그 조회 문제 가능성)');
+        }
+      },
+      stream: true,
+      nonFatal: true,
+    });
   }
 
   const total = steps.length;
 
   for (let i = 0; i < steps.length; i++) {
-    const { label, fn, stream } = steps[i];
+    const { label, fn, stream, nonFatal } = steps[i];
     const prefix = `[${i + 1}/${total}]`;
 
     if (stream) {
@@ -1694,6 +1709,10 @@ async function runAutoSetup(
       try {
         fn();
       } catch (err) {
+        if (nonFatal) {
+          console.log(pc.yellow(`  ${prefix} ${label} 실패 (건너뜀): ${(err as Error).message}`));
+          continue;
+        }
         console.log(pc.red(`  ${prefix} ${label} 실패`));
         console.log(pc.yellow(`  ${(err as Error).message}`));
         console.log('');
@@ -1706,6 +1725,10 @@ async function runAutoSetup(
         fn();
         spinner.stop(`  ${prefix} ${label} 완료`);
       } catch (err) {
+        if (nonFatal) {
+          spinner.stop(pc.yellow(`  ${prefix} ${label} 실패 (건너뜀): ${(err as Error).message}`));
+          continue;
+        }
         spinner.stop(pc.red(`  ${prefix} ${label} 실패`));
         console.log(pc.yellow(`  ${(err as Error).message}`));
         console.log('');
@@ -1719,6 +1742,7 @@ async function runAutoSetup(
     console.log('');
     console.log(pc.yellow('  .env 파일에 DB 접속 정보를 입력한 뒤:'));
     console.log(`    ${pc.cyan(`${pm} run schema   # 스키마 인덱스 생성`)}`);
+    console.log(`    ${pc.cyan(`${pm} run erd      # ERD 다이어그램 생성 (선택)`)}`);
     console.log(`    ${pc.cyan(`${pm} start`)}`);
   } else {
     console.log('');

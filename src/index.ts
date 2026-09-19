@@ -1188,29 +1188,34 @@ async function runAutoSetup(
     },
   });
 
-  if (withSeed) {
+  // Existing DB 모드에서는 seed·schema를 자동 실행하지 않는다. .env가 방금 .env.example에서
+  // 복사된 플레이스홀더 상태라 DB 접속이 반드시 실패하기 때문. 사용자가 .env에 실제 접속 정보를
+  // 입력한 뒤 프로젝트에 포함된 scripts/generate-schema.sh를 직접 실행하도록 안내한다.
+  if (dbMode === 'docker') {
+    if (withSeed) {
+      steps.push({
+        label: '샘플 데이터 마이그레이션 (seed.sh)',
+        fn: () => {
+          const result = spawnSync(pm, ['run', 'seed'], { cwd: targetDir, stdio: 'inherit' });
+          if (result.status !== 0) {
+            throw new Error('샘플 데이터 마이그레이션 실패');
+          }
+        },
+        stream: true,
+      });
+    }
+
     steps.push({
-      label: '샘플 데이터 마이그레이션 (seed.sh)',
+      label: 'DB 스키마 인덱스 생성 (schema)',
       fn: () => {
-        const result = spawnSync(pm, ['run', 'seed'], { cwd: targetDir, stdio: 'inherit' });
+        const result = spawnSync(pm, ['run', 'schema'], { cwd: targetDir, stdio: 'inherit' });
         if (result.status !== 0) {
-          throw new Error('샘플 데이터 마이그레이션 실패');
+          throw new Error('DB 스키마 인덱스 생성 실패');
         }
       },
       stream: true,
     });
   }
-
-  steps.push({
-    label: 'DB 스키마 인덱스 생성 (schema)',
-    fn: () => {
-      const result = spawnSync(pm, ['run', 'schema'], { cwd: targetDir, stdio: 'inherit' });
-      if (result.status !== 0) {
-        throw new Error('DB 스키마 인덱스 생성 실패');
-      }
-    },
-    stream: true,
-  });
 
   const total = steps.length;
 

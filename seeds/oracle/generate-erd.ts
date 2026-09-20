@@ -112,7 +112,7 @@ for (const tableName of tables) {
   }
   const totalCols = colsByTable.get(tableName)?.length ?? 0;
   if (totalCols > FIELD_LIMIT_PER_ENTITY) {
-    lines.push(`    string _more_${totalCols - FIELD_LIMIT_PER_ENTITY}개생략`);
+    lines.push(`    string more_omitted "${totalCols - FIELD_LIMIT_PER_ENTITY}개 컬럼 생략"`);
   }
   lines.push(`  }`);
 }

@@ -155,7 +155,7 @@ for (const e of entities) {
     lines.push(`    ${fType} ${fName}${marker}`);
   }
   if (e.fields.length > FIELD_LIMIT_PER_ENTITY) {
-    lines.push(`    string _more_${e.fields.length - FIELD_LIMIT_PER_ENTITY}개생략`);
+    lines.push(`    string more_omitted "${e.fields.length - FIELD_LIMIT_PER_ENTITY}개 필드 생략"`);
   }
   lines.push(`  }`);
 }

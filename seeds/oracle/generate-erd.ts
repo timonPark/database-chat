@@ -19,7 +19,6 @@ if (!DB_SERVICE_NAME || !DB_USER_NAME || !DB_USER_PASSWORD) {
 }
 
 const OUTPUT_FILE = path.resolve('erd.mmd');
-const FIELD_LIMIT_PER_ENTITY = 12;
 
 const conn = await oracledb.getConnection({
   user: DB_USER_NAME,
@@ -100,7 +99,7 @@ const lines: string[] = ['erDiagram'];
 for (const tableName of tables) {
   const entityId = sanitize(tableName);
   lines.push(`  ${entityId} {`);
-  const cols = (colsByTable.get(tableName) ?? []).slice(0, FIELD_LIMIT_PER_ENTITY);
+  const cols = colsByTable.get(tableName) ?? [];
   for (const [cName, dType] of cols) {
     const isPk = pkSet.has(`${tableName}.${cName}`);
     const isFk = fkColumns.has(`${tableName}.${cName}`);
@@ -109,10 +108,6 @@ for (const tableName of tables) {
     const fType = sanitizeType(dType);
     if (!fName) continue;
     lines.push(`    ${fType} ${fName}${marker}`);
-  }
-  const totalCols = colsByTable.get(tableName)?.length ?? 0;
-  if (totalCols > FIELD_LIMIT_PER_ENTITY) {
-    lines.push(`    string more_omitted "${totalCols - FIELD_LIMIT_PER_ENTITY}개 컬럼 생략"`);
   }
   lines.push(`  }`);
 }

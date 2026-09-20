@@ -98,15 +98,10 @@ async function generateSeedScript(targetDir: string, database: string, projectNa
     scriptRaw.replaceAll('{{PROJECT_NAME}}', projectName),
   );
 
-  // MongoDB 전용: index.md / collection-mapping.md 덮어쓰기
-  if (database === 'mongodb') {
-    for (const fname of ['index.md', 'collection-mapping.md']) {
-      const overrideSrc = path.join(seedDir, fname);
-      if (existsSync(overrideSrc)) {
-        await writeFile(path.join(targetDir, fname), await readFile(overrideSrc, 'utf-8'));
-      }
-    }
-  }
+  // MongoDB: index.md / collection-mapping.md 는 하드코딩된 시드를 두지 않는다.
+  // `pnpm run schema` 실행 시 scripts/generate-index.ts 가 collections/*.md 를 스캔해
+  // 실제 DB 상태를 반영한 두 파일을 deterministic 하게 생성한다. 시드 원본을 두면
+  // 부분 업데이트 시 실제 상태와 어긋난 채로 UI 에 노출되는 사고가 발생한다.
 }
 
 const DB_DOCS_URL: Record<string, string> = {
@@ -258,6 +253,14 @@ async function generateSchemaScript(targetDir: string, database: string, provide
   await mkdir(scriptsDir, { recursive: true });
   await cp(promptSrc,  path.join(scriptsDir, 'generate-schema-prompt.md'));
   await cp(extractSrc, path.join(scriptsDir, 'extract-schema.ts'));
+
+  // MongoDB: index.md / collection-mapping.md 를 deterministic 하게 조립하는 스크립트
+  if (database === 'mongodb') {
+    const indexGenSrc = path.join(SEEDS_DIR, database, 'generate-index.ts');
+    if (existsSync(indexGenSrc)) {
+      await cp(indexGenSrc, path.join(scriptsDir, 'generate-index.ts'));
+    }
+  }
 
   const sh = buildGenerateSchemaSh(database, provider);
   await writeFile(path.join(scriptsDir, 'generate-schema.sh'), sh, { mode: 0o755 });
@@ -787,8 +790,10 @@ echo ""
 
 if [ "\$MODE" != "full" ]; then
   echo "  ✔ ${entityDir}/ 부분 갱신 완료 (\${_TOTAL_DONE}개)"
-  echo "  ℹ  부분 업데이트 모드 — index.md · ${mappingFile} 는 건드리지 않았습니다."
-  rm -rf "\$BATCH_DIR" /tmp/_schema_batch_prompt.txt /tmp/_batch_done_count /tmp/_schema_*.log /tmp/_schema_*.out 2>/dev/null || true
+${cfg.isMongo ? `  # MongoDB: index.md / ${mappingFile} 를 collections/*.md 스캔으로 항상 재생성
+  npx --no-install tsx scripts/generate-index.ts
+` : `  echo "  ℹ  부분 업데이트 모드 — index.md · ${mappingFile} 는 건드리지 않았습니다."
+`}  rm -rf "\$BATCH_DIR" /tmp/_schema_batch_prompt.txt /tmp/_batch_done_count /tmp/_schema_*.log /tmp/_schema_*.out 2>/dev/null || true
   exit 0
 fi
 `;
@@ -911,11 +916,18 @@ with open(mapping_file, 'w') as f: f.write(result.get('mapping', ''))
 PYEOF`;
   }
 
+  // MongoDB: 최종 aggregation 을 LLM 없이 deterministic 스크립트로 대체.
+  // collections/*.md 를 스캔해 index.md / collection-mapping.md 를 조립한다.
+  // 부분 업데이트 모드에서도 같은 스크립트가 호출되므로 실제 DB 상태와 항상 일치한다.
+  const finalCallEffective: string = cfg.isMongo
+    ? `npx --no-install tsx scripts/generate-index.ts`
+    : finalCall;
+
   const finalAggregation = `
 # ── 최종 aggregation (전체 모드에서만) ───────────────────────────────────────
 echo "  ── 최종 단계: index.md · ${mappingFile} 생성 ──"
 
-${finalCall}
+${finalCallEffective}
 
 echo ""
 [ -f "index.md" ]       && echo "  ✔ index.md 생성 완료"

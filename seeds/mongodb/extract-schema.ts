@@ -79,21 +79,38 @@ for (let i = 0; i < cols.length; i++) {
   const countResult = await withStepLog(`estimatedDocumentCount(${col.name})`, 15_000, () =>
     db.collection(col.name).estimatedDocumentCount(),
   );
-  const sampleResult = await withStepLog(`findOne(${col.name})`, 15_000, () =>
-    db.collection(col.name).findOne({}, { projection: { password: 0, passHash: 0 } }),
+  // 여러 문서를 샘플링해 필드 union 을 구성한다. 단일 findOne 은 sparse/optional
+  // 필드를 놓치고, MongoDB 는 문서마다 필드 구성이 다른 경우가 흔해 커버리지가 낮다.
+  // 결정성 유지를 위해 $sample 대신 find().limit(N) 사용 (재실행마다 동일 결과).
+  const SAMPLE_SIZE: number = 10;
+  const samplesResult = await withStepLog(`find.limit(${SAMPLE_SIZE})(${col.name})`, 20_000, () =>
+    db.collection(col.name)
+      .find({}, { projection: { password: 0, passHash: 0 } })
+      .limit(SAMPLE_SIZE)
+      .toArray(),
   );
 
   const count = typeof countResult === 'number' ? countResult : -1;
-  const sample = sampleResult && typeof sampleResult === 'object' && !('__failed' in sampleResult)
-    ? sampleResult as Record<string, unknown>
-    : null;
-
-  const fields: Array<[string, string]> = sample
-    ? Object.entries(sample)
-        .filter(([k]) => k !== '_id')
-        .slice(0, 20)
-        .map(([k, v]) => [k, inferType(v)])
+  const samples: Record<string, unknown>[] = Array.isArray(samplesResult)
+    ? (samplesResult as unknown as Record<string, unknown>[])
     : [];
+
+  // 필드 순서: 첫 등장 순 (첫 문서 필드 순서 우선, 이후 문서의 새 필드는 뒤에 append).
+  // 타입: 첫 non-null 관측값 사용. null 만 관측된 필드는 'null' 로 남김.
+  const fieldOrder: string[] = [];
+  const fieldTypes: Map<string, string> = new Map();
+  for (const doc of samples) {
+    for (const [k, v] of Object.entries(doc)) {
+      if (k === '_id') continue;
+      if (!fieldTypes.has(k)) {
+        fieldOrder.push(k);
+        fieldTypes.set(k, inferType(v));
+      } else if (fieldTypes.get(k) === 'null' && v !== null) {
+        fieldTypes.set(k, inferType(v));
+      }
+    }
+  }
+  const fields: Array<[string, string]> = fieldOrder.map((k) => [k, fieldTypes.get(k)!]);
   entries.push({ name: col.name, count, fields });
 }
 console.error(`추출 완료 (총 ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);

@@ -21,7 +21,6 @@ if (!DB_DATABASE || !DB_USER_NAME || !DB_USER_PASSWORD) {
 
 const targetSchema = DB_SCHEMA ?? 'public';
 const OUTPUT_FILE = path.resolve('erd.mmd');
-const FIELD_LIMIT_PER_ENTITY = 12;
 
 const pool = new Pool({
   host: DB_HOST ?? 'localhost',
@@ -108,7 +107,7 @@ const lines: string[] = ['erDiagram'];
 for (const t of tables) {
   const entityId = sanitize(t.table_name);
   lines.push(`  ${entityId} {`);
-  const cols = (colsByTable.get(t.table_name) ?? []).slice(0, FIELD_LIMIT_PER_ENTITY);
+  const cols = colsByTable.get(t.table_name) ?? [];
   for (const c of cols) {
     const isPk = pkSet.has(`${t.table_name}.${c.column_name}`);
     const isFk = fkColumns.has(`${t.table_name}.${c.column_name}`);
@@ -117,10 +116,6 @@ for (const t of tables) {
     const fType = sanitizeType(c.data_type);
     if (!fName) continue;
     lines.push(`    ${fType} ${fName}${marker}`);
-  }
-  const totalCols = colsByTable.get(t.table_name)?.length ?? 0;
-  if (totalCols > FIELD_LIMIT_PER_ENTITY) {
-    lines.push(`    string more_omitted "${totalCols - FIELD_LIMIT_PER_ENTITY}개 컬럼 생략"`);
   }
   lines.push(`  }`);
 }

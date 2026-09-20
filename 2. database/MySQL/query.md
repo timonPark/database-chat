@@ -1,6 +1,6 @@
 # MySQL Query — `/db-query`
 
-단순 `SELECT` 실행 엔드포인트. `WHERE`·`ORDER BY`·단일 테이블 조회에 사용합니다. `JOIN`·`GROUP BY`·`HAVING`·서브쿼리가 필요하면 [`/db-aggregate`](./aggregate.md)를 씁니다.
+단순 `SELECT` 실행 엔드포인트. `WHERE`·`ORDER BY`·단일 테이블 조회에 사용합니다. `JOIN`·`GROUP BY`·`HAVING`·서브쿼리가 필요하면 [`/db-aggregate`](./join-group.md)를 씁니다.
 
 기준 구현: [`templates/claude-mysql/server.ts:352`](../../templates/claude-mysql/server.ts)
 

@@ -17,7 +17,7 @@
 | --- | --- |
 | [`connection.md`](./connection.md) | `mysql2` 풀 생성·연결·타임아웃, 필수 환경 변수, 계정 최소 권한 |
 | [`query.md`](./query.md) | `/db-query` 엔드포인트 규약 — 단순 `SELECT` 실행, 자동 `LIMIT` 부착, 민감 컬럼 제거 |
-| [`aggregate.md`](./aggregate.md) | `/db-aggregate` 엔드포인트 규약 — `JOIN`·`GROUP BY`·`HAVING`·서브쿼리 지원, `LIMIT` 자동 부착 없음 |
+| [`join-group.md`](./join-group.md) | `/db-aggregate` 엔드포인트 규약 — `JOIN`·`GROUP BY`·`HAVING`·서브쿼리 지원, `LIMIT` 자동 부착 없음 |
 | [`type-conversion.md`](./type-conversion.md) | `mysql2` 드라이버의 MySQL ↔ JavaScript 타입 매핑, timezone, `DECIMAL`/`BIGINT` 문자열화 |
 
 ## 참고 링크

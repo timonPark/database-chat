@@ -1,6 +1,8 @@
-# MySQL Aggregate (SQL) — `/db-aggregate`
+# MySQL Join / Group — `/db-aggregate`
 
-집계·조인 SQL 실행 엔드포인트. `JOIN`·`GROUP BY`·`HAVING`·서브쿼리·윈도우 함수가 필요할 때 사용합니다. 단순 `WHERE`/`ORDER BY`만 필요하면 [`/db-query`](./query.md)를 씁니다.
+`JOIN`·`GROUP BY`·`HAVING`·서브쿼리·윈도우 함수가 필요한 SELECT를 실행하는 엔드포인트. 단순 `WHERE`/`ORDER BY`만 필요하면 [`/db-query`](./query.md)를 씁니다.
+
+> **이름 참고** — 서버 코드의 엔드포인트 이름(`/db-aggregate`)은 MongoDB 템플릿에서 물려받은 명명이라 그대로 유지합니다. SQL에는 "aggregate query"라는 별개 개념이 없고 그냥 `SELECT` 안에서 aggregate function(`SUM`·`COUNT`·`AVG` 등)과 `JOIN`·`GROUP BY`·`HAVING` 절을 조합할 뿐이므로, 문서는 SQL 관점에 맞춰 `join-group.md`로 명명합니다.
 
 MongoDB의 `/db-aggregate`가 파이프라인 배열을 받는 반면, MySQL은 **완성된 SQL 문자열**을 그대로 실행합니다.
 

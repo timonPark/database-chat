@@ -20,6 +20,18 @@ const CLAUDE_MAX_TURNS: string = process.env.CLAUDE_MAX_TURNS ?? '10';
 const TABLE_INDEX_FILE: string = './index.md';
 const TABLES_DIR: string = path.resolve(import.meta.dirname, 'tables');
 
+// Claude 자식 프로세스에 상속시키지 않을 민감 키
+// Why: LLM 이 spawn 된 프로세스의 env 를 통해 자격 증명을 유출하지 못하게 차단
+const CLAUDE_CHILD_ENV: NodeJS.ProcessEnv = (() => {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  const SENSITIVE_KEYS: readonly string[] = [
+    'DB_HOST', 'DB_PORT', 'DB_SERVICE_NAME',
+    'DB_USER_NAME', 'DB_USER_PASSWORD',
+  ];
+  for (const key of SENSITIVE_KEYS) delete env[key];
+  return env;
+})();
+
 if (!DB_HOST || !DB_SERVICE_NAME || !DB_USER_NAME || !DB_USER_PASSWORD) {
   console.error('필수 환경 변수가 설정되지 않았습니다. .env 파일을 확인하세요.');
   process.exit(1);
@@ -482,7 +494,7 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
       '--max-turns', CLAUDE_MAX_TURNS,
       '--model', CLAUDE_MODEL,
     ],
-    { stdio: ['ignore', 'pipe', 'pipe'] }
+    { stdio: ['ignore', 'pipe', 'pipe'], env: CLAUDE_CHILD_ENV }
   );
 
   if (requestId) activeJobs.set(requestId, child);

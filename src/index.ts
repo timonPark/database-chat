@@ -2,7 +2,7 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { cp, mkdir, rename, readFile, writeFile } from 'fs/promises';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, chmodSync } from 'fs';
 import { execSync, spawnSync } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -1665,6 +1665,11 @@ async function runAutoSetup(
           writeFileSync(envPath, env);
         }
       }
+      // .env 는 소유자만 읽기/쓰기 가능하도록 제한 (Unix)
+      // Why: LLM CLI 를 포함한 다른 사용자의 파일 접근을 파일시스템 레벨에서도 차단
+      if (process.platform !== 'win32') {
+        try { chmodSync(envPath, 0o600); } catch { /* 권한 부여 실패해도 스캐폴딩은 계속 */ }
+      }
     },
   });
 
@@ -2027,6 +2032,15 @@ async function main(): Promise<void> {
     console.log(`    ${pc.cyan(step)}`);
   }
   console.log('');
+
+  // 보안 정책 안내 (Claude 계열은 .claude/settings.local.json 및 프로세스 env 필터로 .env 접근 차단됨)
+  if (provider === 'claude') {
+    console.log(pc.dim('  Security:'));
+    console.log(pc.dim('    .env 는 사용자가 직접 관리합니다. LLM 은 .env 를 읽거나 쓸 수 없도록'));
+    console.log(pc.dim('    .claude/settings.local.json (permissions.deny) · 자식 프로세스 env 필터'));
+    console.log(pc.dim('    · 파일 권한(0600) 3중으로 차단됩니다.'));
+    console.log('');
+  }
 
   // Auto-setup 여부 확인
   const autoResult = await p.confirm({

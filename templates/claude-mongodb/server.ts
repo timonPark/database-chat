@@ -87,8 +87,25 @@ interface CancelBody {
   requestId: string;
 }
 
-type SseEventType = 'progress' | 'log' | 'result' | 'error' | 'cancelled';
-type SendFn = (type: SseEventType, msg: string) => void;
+type SseEventType = 'progress' | 'log' | 'query' | 'result-data' | 'result' | 'error' | 'cancelled';
+type SendFn = (type: SseEventType, msg: unknown) => void;
+
+interface QueryEventPayload {
+  endpoint: '/db-query' | '/db-aggregate';
+  requestBody: Record<string, unknown>;
+}
+
+interface ResultDataEventPayload {
+  count: number;
+  data: Document[];
+  columns: unknown[];
+  columnConfidence: 'full' | 'partial';
+  unmappedKeys: string[];
+  dbTimeMs: number;
+  autoLimitedTo?: number;
+  truncatedTo?: number;
+  truncatedFrom?: number;
+}
 
 // Claude stream-json 이벤트 타입
 interface ClaudeToolUseBlock {
@@ -196,7 +213,15 @@ function buildCollectionGuide(): string {
 }
 
 function buildSystemPrompt(requestId: string, limit: number = 20): string {
-  return `MongoDB 조회 어시스턴트. 설명 없이 즉시 curl로 쿼리 실행 후 결과를 한국어로 답한다.
+  return `MongoDB 조회 어시스턴트. 사용자 질문을 curl 로 쿼리 실행 후 즉시 종료한다.
+
+**절대 규칙**: 쿼리가 성공하면 어떤 텍스트도 만들지 마라. "조회되었습니다", "N건 나왔습니다", "결과입니다" 같은 확인 메시지도 금지. 서버가 UI 로 표를 직접 그린다. 요약도 나열도 인사말도 필요 없다.
+
+**허용되는 텍스트 응답**:
+- 쿼리 전 사용자 사전 확인 (예: transactions 요약/로우 선택)
+- 쿼리 오류 시 짧은 원인 (예: "collection 필드 누락")
+
+쿼리가 성공한 turn 은 반드시 아무 텍스트 없이 종료.
 
 [컬렉션]
 ${buildCollectionSummary()}
@@ -218,12 +243,10 @@ ${buildCollectionGuide()}
 - $lookup 사용 시 반드시 $group으로 중복 제거 (1:N 조인 시 중복 발생)
 - $lookup 대상은 같은 database의 컬렉션만 가능하며, 조인 대상 foreignField에 맞는 필드 타입(ObjectId/Number/String)을 확인한다
 - $group에서 조인 대상 필드는 $first로 전체 수집 후 $replaceRoot로 루트 교체 — 필드를 개별 나열하지 말 것
-- /db-query 의 limit 필드 및 /db-aggregate 파이프라인 마지막 stage는 반드시 { "$limit": ${limit} } 로 명시한다. aggregate 에서 $limit 누락 시 서버가 강제 주입하며 응답에 autoLimitedTo 필드가 포함됨 — 그 경우 재쿼리 금지하고 반환된 상위 ${limit}건으로 즉시 응답한다. 엑셀 내보내기는 원본 파이프라인 그대로 재실행함
-- 응답 JSON에 truncatedTo 필드가 있으면 LLM tool 출력 한도로 서버가 상위 truncatedTo건만 전송한 상태다. 재쿼리·python/wc 우회·재시도 모두 금지, 반환된 data 배열 그대로 사용자에게 응답한다. 더 많은 필드/건수가 필요하면 다음 요청에서 $project로 필드를 줄이거나 limit을 낮춰 재요청한다
-- 숫자로도 문자열로도 저장 가능한 값(전화번호·사번·주민등록번호 등)은 우선 값 그대로 조회한 뒤 결과가 0건이면 타입을 반대로 바꿔 한 번 더 재시도한다. 예) "01012345678"로 검색해 0건이면 즉시 숫자 01012345678(선행 0 제거된 정수)로 재조회. 재조회에서도 0건이면 "조회된 데이터가 없습니다"
-- 결과 없으면 즉시 "조회된 데이터가 없습니다"
-- 출력이 파일로 저장되면 파일 읽지 말고 $group으로 줄여 재쿼리
-- 오류 시 원인 설명
+- /db-query 의 limit 필드 및 /db-aggregate 파이프라인 마지막 stage는 반드시 { "$limit": ${limit} } 로 명시한다. aggregate 에서 $limit 누락 시 서버가 강제 주입하며 응답에 autoLimitedTo 필드가 포함됨 — 그 경우 재쿼리 금지
+- 응답은 rows 를 포함하지 않는 meta({count, dbTimeMs, columnConfidence, unmappedKeys}) 만 반환된다. 응답값을 사용자에게 나열하지 말 것 — 서버가 UI 로 직접 표를 스트림한다
+- 숫자로도 문자열로도 저장 가능한 값(전화번호·사번·주민등록번호 등)은 우선 값 그대로 조회한 뒤 결과가 0건이면 타입을 반대로 바꿔 한 번 더 재시도한다. 예) "01012345678"로 검색해 count=0 이면 즉시 숫자 01012345678(선행 0 제거된 정수)로 재조회
+- 오류 발생 시 짧게 원인만 전달 (예: "collection 필드 누락"). 정상 응답이면 아무 말도 하지 말고 종료
 - 거래 내역(transactions) 조회 요청 시 쿼리 실행 전에 반드시 먼저 물어본다: "요약(계좌별 거래 건수 합계)으로 보시겠어요, 아니면 개별 거래 건 단위(로우)로 보시겠어요?" — 사용자가 답하면 그에 맞게 쿼리한다`;
 }
 
@@ -330,6 +353,32 @@ function withSensitiveFieldsUnset(pipeline: Document[]): Document[] {
   return [...pipeline, { $unset: SENSITIVE_FIELDS }];
 }
 
+// Chat 컨텍스트에서 온 요청이면 rows 를 브라우저로 SSE 스트림하고 Claude 에는 meta 만 돌려준다.
+// - UI 는 SSE 로 원본(uncapped) 을 받는다. capForToolOutput 은 LLM 8KB 상한 대응이므로 이 경로에서는 스킵.
+// - Claude 가 보는 curl 응답은 rows·columns 를 제거한 meta 로 대체.
+// non-chat(직접 curl 호출 등) 요청은 원본 body 그대로 반환 (capForToolOutput 은 호출자가 감쌀 것).
+function splitForChatContext(
+  requestId: string | undefined,
+  fullBody: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!requestId) return null;
+  const send = chatSends.get(requestId);
+  if (!send) return null;
+
+  send('result-data', fullBody as unknown as ResultDataEventPayload);
+
+  // Claude 가 보는 meta: count/dbTimeMs/columnConfidence/unmappedKeys/message/autoLimitedTo 만 유지
+  const {
+    data: _data,
+    columns: _columns,
+    truncatedTo: _t1,
+    truncatedFrom: _t2,
+    hint: _hint,
+    ...meta
+  } = fullBody as Record<string, unknown> & { data?: unknown; columns?: unknown; truncatedTo?: number; truncatedFrom?: number; hint?: string };
+  return meta;
+}
+
 // LLM tool 출력 한도(약 8KB, 여유 마진 포함)에 맞춰 응답 body를 자동 축약.
 const TOOL_OUTPUT_MAX_BYTES: number = 6500;
 
@@ -361,7 +410,6 @@ function capForToolOutput(body: Record<string, unknown>, maxBytes: number = TOOL
 
 function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
   let systemSeen: boolean = false;
-  let lastEventType: string = '';
 
   return function handleClaudeEvent(event: ClaudeEvent): void {
     switch (event.type) {
@@ -376,7 +424,6 @@ function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
       case 'assistant': {
         const contents: ClaudeContentBlock[] = event.message?.content ?? [];
         const hasToolUse: boolean = contents.some(b => b.type === 'tool_use');
-        const hasText: boolean = contents.some(b => b.type === 'text');
 
         if (hasToolUse) {
           for (const block of contents) {
@@ -384,6 +431,7 @@ function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
             const cmd: string = block.input?.command?.trim() ?? '';
             if (cmd.includes('/db-query') || cmd.includes('/db-aggregate')) {
               const isAgg: boolean = cmd.includes('/db-aggregate');
+              const endpoint: '/db-query' | '/db-aggregate' = isAgg ? '/db-aggregate' : '/db-query';
               console.log(`${ts()} [조회 시작]  DB ${isAgg ? '집계' : '쿼리'} 실행 중...`);
               console.log(`             $ ${cmd}`);
               send('progress', `조회 시작 — DB ${isAgg ? '집계' : '쿼리'} 실행 중...`);
@@ -392,8 +440,11 @@ function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
               const rawData: string | undefined = singleMatch?.[1] ?? doubleMatch?.[1]?.replace(/\\"/g, '"');
               if (rawData) {
                 try {
+                  const parsedBody = JSON.parse(rawData) as Record<string, unknown>;
+                  // 구조화된 query 이벤트 — UI 가 파이프라인/필터 상세를 파싱해 사용할 수 있음
+                  send('query', { endpoint, requestBody: parsedBody } satisfies QueryEventPayload);
                   // 공백 없는 압축 JSON — 사용자가 UI 로그에서 그대로 복사해 쿼리 에디터로 검증 가능하도록.
-                  send('log', JSON.stringify(JSON.parse(rawData)));
+                  send('log', JSON.stringify(parsedBody));
                 } catch {
                   const collMatch: RegExpMatchArray | null = rawData.match(/["']collection["']\s*:\s*["']([^"']+)["']/);
                   send('log', collMatch ? `collection: ${collMatch[1]}` : rawData);
@@ -418,11 +469,8 @@ function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
               send('log', `$ ${cmd.length > 120 ? cmd.slice(0, 120) + '...' : cmd}`);
             }
           }
-        } else if (hasText && lastEventType === 'user') {
-          // DB 응답을 받은 직후에만 "응답값 생성 중..." 표시
-          console.log(`${ts()} [응답 생성]  응답값 생성 중...`);
-          send('progress', '응답값 생성 중...');
         }
+        // LLM 이 tool_result 이후 text 를 만들면(예: transactions 사전 확인 대화·오류 설명) 그대로 finalResult 로 흘러가 result 이벤트로 전달됨.
         break;
       }
 
@@ -466,8 +514,6 @@ function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
         }
         break;
     }
-
-    lastEventType = event.type;
   };
 }
 
@@ -479,6 +525,10 @@ app.use(express.static(path.join(import.meta.dirname, 'public')));
 
 const activeJobs: Map<string, ChildProcess> = new Map();
 const queryParamsStore: Map<string, QueryParams> = new Map();
+// requestId → SSE sender bound to an active /chat stream.
+// /db-query·/db-aggregate 는 chatSends 에 등록된 요청이면 rows 를 브라우저로 직접 스트림하고
+// curl 응답(=Claude 가 보는 tool_result) 에서 rows 를 뺀 meta 만 반환한다.
+const chatSends: Map<string, SendFn> = new Map();
 
 // ── 엔드포인트 ────────────────────────────────────────────────────────────────
 
@@ -537,13 +587,15 @@ app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Res
     if (totalCount === 0) {
       const dbTimeMs: number = Date.now() - dbStart;
       const emptyCols = buildColumnsFromQuery(collection, [], projection);
-      return res.json({
+      const body = {
         count: 0,
         data: [],
         dbTimeMs,
-        message: '조회된 데이터가 없습니다. 추가 쿼리 없이 즉시 이 메시지를 사용자에게 전달하라.',
+        message: '조회된 데이터가 없습니다.',
         ...emptyCols,
-      });
+      };
+      const meta = splitForChatContext(requestId, body);
+      return res.json(meta ?? body);
     }
 
     // Step 2: 건수 기반 limit 적용하여 본 쿼리 실행
@@ -556,7 +608,11 @@ app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Res
     const dbTimeMs: number = Date.now() - dbStart;
 
     const cols = buildColumnsFromQuery(collection, docs, projection);
-    return res.json(capForToolOutput({ count: totalCount, data: docs, dbTimeMs, ...cols }));
+    const fullBody = { count: totalCount, data: docs, dbTimeMs, ...cols };
+    const meta = splitForChatContext(requestId, fullBody);
+    if (meta) return res.json(meta);
+    // 직접 curl 호출자(non-chat) 에게만 LLM 상한 대응 축약을 적용
+    return res.json(capForToolOutput(fullBody));
   } catch (err) {
     if (isTimeoutError(err)) {
       console.warn(`${ts()} [타임아웃] ${DB_TIMEOUT_MSG} — ${collection}`);
@@ -623,20 +679,24 @@ app.post('/db-aggregate', async (req: Request<object, object, DbAggregateBody>, 
 
     if (totalCount === 0) {
       const emptyCols = buildColumnsFromPipeline(collection, [], analysis);
-      return res.json({
+      const emptyBody = {
         count: 0,
         data: [],
         dbTimeMs,
-        message: '조회된 데이터가 없습니다. 추가 쿼리 없이 즉시 이 메시지를 사용자에게 전달하라.',
+        message: '조회된 데이터가 없습니다.',
         ...emptyCols,
-      });
+      };
+      const meta = splitForChatContext(requestId, emptyBody);
+      return res.json(meta ?? emptyBody);
     }
     const cols = buildColumnsFromPipeline(collection, docs, analysis);
     const body: Record<string, unknown> = { count: totalCount, data: docs, dbTimeMs, ...cols };
     if (autoLimited) {
       body.autoLimitedTo = limit;
-      body.message = `pipeline 끝에 $limit 이 없어 서버가 자동으로 { $limit: ${limit} } 을 부착했습니다. 총 ${totalCount}건 중 상위 ${docs.length}건만 반환. 재쿼리 금지, 이 결과 그대로 사용자에게 응답하세요.`;
+      body.message = `pipeline 끝에 $limit 이 없어 서버가 자동으로 { $limit: ${limit} } 을 부착했습니다. 총 ${totalCount}건 중 상위 ${docs.length}건만 반환. 재쿼리 금지.`;
     }
+    const meta = splitForChatContext(requestId, body);
+    if (meta) return res.json(meta);
     return res.json(capForToolOutput(body));
   } catch (err) {
     if (isTimeoutError(err)) {
@@ -716,9 +776,19 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
-  const send: SendFn = (type: SseEventType, msg: string): void => {
-    res.write(`data: ${JSON.stringify({ type, message: msg })}\n\n`);
+  // result-data 를 한 번이라도 흘렸다면 LLM 이 마지막에 짧은 요약("N건 조회되었습니다") 을 만들어도 억제한다.
+  // 데이터 요약은 UI 표가 담당 — 최종 result 이벤트는 사전 확인 대화나 오류 설명 용도로만 쓴다.
+  let resultDataSent = false;
+
+  const send: SendFn = (type: SseEventType, msg: unknown): void => {
+    if (type === 'result-data') resultDataSent = true;
+    const payload = typeof msg === 'string'
+      ? { type, message: msg }
+      : { type, data: msg };
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
+
+  if (requestId) chatSends.set(requestId, send);
 
   console.log(`\n${'─'.repeat(60)}`);
   console.log(`[요청] ${message.trim()}`);
@@ -765,7 +835,10 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
   child.stderr!.on('data', (data: Buffer) => { stderr += data.toString(); });
 
   child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-    if (requestId) activeJobs.delete(requestId);
+    if (requestId) {
+      activeJobs.delete(requestId);
+      chatSends.delete(requestId);
+    }
     if (signal === 'SIGKILL' || signal === 'SIGTERM') {
       send('cancelled', '조회가 중지되었습니다.');
     } else if (code !== 0 && !finalResult) {
@@ -773,7 +846,9 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
       console.error(stderr);
       send('error', 'Claude 프로세스 실행 실패: ' + stderr.slice(0, 200));
     } else {
-      send('result', finalResult.trim());
+      // 쿼리가 성공적으로 실행되어 rows 를 UI 로 흘렸다면 LLM 텍스트는 억제.
+      const outText: string = resultDataSent ? '' : finalResult.trim();
+      send('result', outText);
     }
     console.log(`${'─'.repeat(60)}\n`);
     res.write('data: [DONE]\n\n');

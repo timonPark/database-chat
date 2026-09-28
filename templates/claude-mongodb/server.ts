@@ -237,6 +237,7 @@ ${buildCollectionGuide()}
 규칙:
 - password·passHash 는 반드시 제외
 - Date/ObjectId/Decimal128 조건은 MongoDB Extended JSON을 사용한다: {"$date":"2020-01-01T00:00:00.000Z"}, {"$oid":"..."}, {"$numberDecimal":"123.45"}
+- 필드 네이밍 규약 — 접미사 \`Idx\` = String, \`Obj\` = ObjectId. \`Idx\` 필드는 절대 {"$oid":"..."} 로 감싸지 말고 문자열로 그대로 전달. \`Obj\` 필드는 {"$oid":"..."} 로 감싼다. "환자식별자"·"사용자ID" 같이 모호한 표현은 반드시 컬렉션 스키마를 확인해 정확한 필드명(예: patientObj vs patientIdx) 을 고른 뒤 그에 맞는 타입으로 전달
 - 단순 필터·정렬·필드 선택은 /db-query 사용, $group·$lookup·$unwind·계산 필드가 필요할 때만 /db-aggregate 사용
 - 집계는 가능한 한 초반에 $match를 두고, 반환 필드 제한은 마지막 $project 또는 $unset으로 처리한다
 - $lookup 사용 시 반드시 $group으로 중복 제거 (1:N 조인 시 중복 발생)
@@ -396,7 +397,9 @@ function isHex(v: unknown): v is string {
 // - `{keyIdx: "hex24"}` → `{keyObj: {$oid: "hex24"}}`
 // - `{keyIdx: {$eq: "hex24"}}` → `{keyObj: {$oid: "hex24"}}`
 // - `{keyIdx: {$in: ["hex", ...]}}` → `{keyObj: {$in: [{$oid:"hex"},...]}}`
-// 스키마 상 Idx 로 나와있어 LLM 이 string 으로 쿼리했지만 실제 DB 는 Obj 로 저장된 경우 대응.
+// - `{keyIdx: {$oid: "hex24"}}` → `{keyObj: {$oid: "hex24"}}` (LLM 이 Idx 를 실수로 $oid 로 감싼 케이스)
+// 스키마 상 Idx 로 나와있어 LLM 이 string 으로 쿼리했지만 실제 DB 는 Obj 로 저장된 경우, 또는
+// LLM 이 Idx 필드에 $oid 를 잘못 붙인 경우(Idx=String 이므로 타입 불일치) 대응.
 function tryIdxToObjRewrite(key: string, value: unknown): { key: string; value: unknown } | null {
   if (!key.endsWith('Idx')) return null;
   const newKey = `${key.slice(0, -3)}Obj`;
@@ -406,6 +409,7 @@ function tryIdxToObjRewrite(key: string, value: unknown): { key: string; value: 
     if (entries.length === 1) {
       const [op, val] = entries[0];
       if (op === '$eq' && isHex(val)) return { key: newKey, value: { $oid: val } };
+      if (op === '$oid' && isHex(val)) return { key: newKey, value: { $oid: val } };
       if (op === '$in' && Array.isArray(val) && val.length > 0 && val.every(isHex)) {
         return { key: newKey, value: { $in: (val as string[]).map((h) => ({ $oid: h })) } };
       }

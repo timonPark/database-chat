@@ -189,6 +189,7 @@ ${buildCollectionGuide()}
 규칙:
 - password·passHash 는 반드시 제외
 - Date/ObjectId/Decimal128 조건은 MongoDB Extended JSON을 사용한다: {"$date":"2020-01-01T00:00:00.000Z"}, {"$oid":"..."}, {"$numberDecimal":"123.45"}
+- 필드 네이밍 규약 — 접미사 \`Idx\` = String, \`Obj\` = ObjectId. \`Idx\` 필드는 절대 {"$oid":"..."} 로 감싸지 말고 문자열로 그대로 전달. \`Obj\` 필드는 {"$oid":"..."} 로 감싼다. "환자식별자"·"사용자ID" 같이 모호한 표현은 반드시 컬렉션 스키마를 확인해 정확한 필드명(예: patientObj vs patientIdx) 을 고른 뒤 그에 맞는 타입으로 전달
 - 단순 필터·정렬·필드 선택은 /db-query 사용, $group·$lookup·$unwind·계산 필드가 필요할 때만 /db-aggregate 사용
 - 집계는 가능한 한 초반에 $match를 두고, 반환 필드 제한은 마지막 $project 또는 $unset으로 처리한다
 - $lookup 사용 시 반드시 $group으로 중복 제거 (1:N 조인 시 중복 발생)

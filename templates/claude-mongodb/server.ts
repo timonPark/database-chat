@@ -6,6 +6,8 @@ import type { Server } from 'http';
 import fs from 'fs';
 import path from 'path';
 import { loadAllSchemas } from './scripts/load-schema-index.js';
+import { analyzePipeline } from './scripts/pipeline-analyze.js';
+import { buildColumnsFromQuery, buildColumnsFromPipeline } from './scripts/build-columns.js';
 
 // ── 환경 변수 ──────────────────────────────────────────────────────────────────
 
@@ -534,7 +536,14 @@ app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Res
 
     if (totalCount === 0) {
       const dbTimeMs: number = Date.now() - dbStart;
-      return res.json({ count: 0, data: [], dbTimeMs, message: '조회된 데이터가 없습니다. 추가 쿼리 없이 즉시 이 메시지를 사용자에게 전달하라.' });
+      const emptyCols = buildColumnsFromQuery(collection, [], projection);
+      return res.json({
+        count: 0,
+        data: [],
+        dbTimeMs,
+        message: '조회된 데이터가 없습니다. 추가 쿼리 없이 즉시 이 메시지를 사용자에게 전달하라.',
+        ...emptyCols,
+      });
     }
 
     // Step 2: 건수 기반 limit 적용하여 본 쿼리 실행
@@ -546,7 +555,8 @@ app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Res
     const docs: WithId<Document>[] = await cursor.limit(limit).toArray();
     const dbTimeMs: number = Date.now() - dbStart;
 
-    return res.json(capForToolOutput({ count: totalCount, data: docs, dbTimeMs }));
+    const cols = buildColumnsFromQuery(collection, docs, projection);
+    return res.json(capForToolOutput({ count: totalCount, data: docs, dbTimeMs, ...cols }));
   } catch (err) {
     if (isTimeoutError(err)) {
       console.warn(`${ts()} [타임아웃] ${DB_TIMEOUT_MSG} — ${collection}`);
@@ -609,10 +619,20 @@ app.post('/db-aggregate', async (req: Request<object, object, DbAggregateBody>, 
     if (requestId) queryParamsStore.set(requestId, aggParams);
     queryParamsStore.set('__latest__', aggParams);
 
+    const analysis = analyzePipeline(collection, pipelineArr);
+
     if (totalCount === 0) {
-      return res.json({ count: 0, data: [], dbTimeMs, message: '조회된 데이터가 없습니다. 추가 쿼리 없이 즉시 이 메시지를 사용자에게 전달하라.' });
+      const emptyCols = buildColumnsFromPipeline(collection, [], analysis);
+      return res.json({
+        count: 0,
+        data: [],
+        dbTimeMs,
+        message: '조회된 데이터가 없습니다. 추가 쿼리 없이 즉시 이 메시지를 사용자에게 전달하라.',
+        ...emptyCols,
+      });
     }
-    const body: Record<string, unknown> = { count: totalCount, data: docs, dbTimeMs };
+    const cols = buildColumnsFromPipeline(collection, docs, analysis);
+    const body: Record<string, unknown> = { count: totalCount, data: docs, dbTimeMs, ...cols };
     if (autoLimited) {
       body.autoLimitedTo = limit;
       body.message = `pipeline 끝에 $limit 이 없어 서버가 자동으로 { $limit: ${limit} } 을 부착했습니다. 총 ${totalCount}건 중 상위 ${docs.length}건만 반환. 재쿼리 금지, 이 결과 그대로 사용자에게 응답하세요.`;

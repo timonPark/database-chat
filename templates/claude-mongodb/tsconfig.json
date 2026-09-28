@@ -10,6 +10,6 @@
     "outDir": "./dist",
     "rootDir": "./"
   },
-  "include": ["server.ts", "scripts/load-schema-index.ts"],
+  "include": ["server.ts", "scripts/load-schema-index.ts", "scripts/pipeline-analyze.ts"],
   "exclude": ["node_modules", "dist"]
 }

@@ -211,16 +211,21 @@ function buildCollectionGuide(): string {
   }
 }
 
-function buildSystemPrompt(requestId: string, limit: number = 20): string {
-  return `MongoDB 조회 어시스턴트. 사용자 질문을 curl 로 쿼리 실행 후 즉시 종료한다.
+function buildSystemPrompt(limit: number = 20): string {
+  return `MongoDB 조회 쿼리 생성기. 사용자 자연어 요청 → **정확히 하나의 JSON 객체** 만 출력하고 종료.
 
-**절대 규칙**: 쿼리가 성공하면 어떤 텍스트도 만들지 마라. "조회되었습니다", "N건 나왔습니다", "결과입니다" 같은 확인 메시지도 금지. 서버가 UI 로 표를 직접 그린다. 요약도 나열도 인사말도 필요 없다.
+**절대 규칙**:
+- 응답은 오직 하나의 JSON 객체. 앞뒤에 설명·인사·마크다운 코드펜스·요약 어떤 것도 붙이지 마라
+- 도구 · 명령 실행 없음. curl · bash · cat 등 사용 금지 (도구가 제공되지 않음)
+- 서버가 이 JSON 을 파싱해 DB 를 조회하고 결과를 UI 에 직접 그린다. 너는 결과를 볼 수 없고, 결과를 안내할 필요도 없다
 
-**허용되는 텍스트 응답**:
-- 쿼리 전 사용자 사전 확인 (예: transactions 요약/로우 선택)
-- 쿼리 오류 시 짧은 원인 (예: "collection 필드 누락")
+**출력 형식** (둘 중 하나):
 
-쿼리가 성공한 turn 은 반드시 아무 텍스트 없이 종료.
+단일 컬렉션 조회:
+{"kind":"query","collection":"<이름>","filter":{...},"projection":{...},"limit":${limit}}
+
+집계 (조인·그룹):
+{"kind":"aggregate","collection":"<이름>","pipeline":[{"$match":{...}}, ...]}
 
 [컬렉션]
 ${buildCollectionSummary()}
@@ -228,25 +233,16 @@ ${buildCollectionSummary()}
 [컬렉션 선택 가이드: 컬렉션명 | 자연어 키워드 | 주요 필드 | 설명]
 ${buildCollectionGuide()}
 
-[필드 확인] 필드명 불확실 시: cat "${COLLECTIONS_DIR}/<컬렉션명>.md"
-
-[단일 컬렉션] curl -sX POST http://localhost:${PORT}/db-query -H 'Content-Type: application/json' -d '{"requestId":"${requestId}","collection":"...","filter":{...},"projection":{...},"limit":${limit}}'
-
-[조인/집계] curl -sX POST http://localhost:${PORT}/db-aggregate -H 'Content-Type: application/json' -d '{"requestId":"${requestId}","collection":"...","pipeline":[{"$match":{...}},{"$lookup":{"from":"...","localField":"...","foreignField":"_id","as":"..."}},{"$unwind":"$..."},{"$group":{...}}]}'
-
 규칙:
-- password·passHash 는 반드시 제외
-- Date/ObjectId/Decimal128 조건은 MongoDB Extended JSON을 사용한다: {"$date":"2020-01-01T00:00:00.000Z"}, {"$oid":"..."}, {"$numberDecimal":"123.45"}
-- 필드 네이밍 규약 — 접미사 \`Idx\` = String, \`Obj\` = ObjectId. \`Idx\` 필드는 절대 {"$oid":"..."} 로 감싸지 말고 문자열로 그대로 전달. \`Obj\` 필드는 {"$oid":"..."} 로 감싼다. "환자식별자"·"사용자ID" 같이 모호한 표현은 반드시 컬렉션 스키마를 확인해 정확한 필드명(예: patientObj vs patientIdx) 을 고른 뒤 그에 맞는 타입으로 전달
-- 단순 필터·정렬·필드 선택은 /db-query 사용, $group·$lookup·$unwind·계산 필드가 필요할 때만 /db-aggregate 사용
-- 집계는 가능한 한 초반에 $match를 두고, 반환 필드 제한은 마지막 $project 또는 $unset으로 처리한다
-- $lookup 사용 시 반드시 $group으로 중복 제거 (1:N 조인 시 중복 발생)
-- $lookup 대상은 같은 database의 컬렉션만 가능하며, 조인 대상 foreignField에 맞는 필드 타입(ObjectId/Number/String)을 확인한다
-- $group에서 조인 대상 필드는 $first로 전체 수집 후 $replaceRoot로 루트 교체 — 필드를 개별 나열하지 말 것
-- /db-query 의 limit 필드 및 /db-aggregate 파이프라인 마지막 stage는 반드시 { "$limit": ${limit} } 로 명시한다. aggregate 에서 $limit 누락 시 서버가 강제 주입
-- 응답은 rows 를 포함하지 않는 meta({count, dbTimeMs, columnConfidence, unmappedKeys}) 만 반환된다. 서버가 UI 로 직접 표를 스트림하므로 결과 나열 금지
-- 오류 발생 시 짧게 원인만 전달 (예: "collection 필드 누락"). 정상 응답이면 아무 말도 하지 말고 종료
-- 거래 내역(transactions) 조회 요청 시 쿼리 실행 전에 반드시 먼저 물어본다: "요약(계좌별 거래 건수 합계)으로 보시겠어요, 아니면 개별 거래 건 단위(로우)로 보시겠어요?" — 사용자가 답하면 그에 맞게 쿼리한다`;
+- password · passHash 는 반드시 제외
+- Date · ObjectId · Decimal128 조건은 MongoDB Extended JSON: {"$date":"2020-01-01T00:00:00.000Z"}, {"$oid":"..."}, {"$numberDecimal":"123.45"}
+- 필드 네이밍 규약 — 접미사 \`Idx\` = String, \`Obj\` = ObjectId. \`Idx\` 필드는 절대 {"$oid":"..."} 로 감싸지 말 것 (문자열 그대로). \`Obj\` 필드는 {"$oid":"..."} 로 감쌈. "환자식별자" 같이 모호한 표현은 컬렉션 스키마에서 정확한 필드명 확인 (예: patientObj vs patientIdx)
+- 단순 필터 · 정렬 · 필드 선택은 kind:"query", $group · $lookup · $unwind · 계산 필드가 필요할 때만 kind:"aggregate"
+- 집계는 가능한 한 초반에 $match, 반환 필드 제한은 마지막 $project 또는 $unset
+- $lookup 사용 시 반드시 $group 으로 중복 제거 (1:N 조인 시 중복 발생)
+- $lookup 대상은 같은 database, foreignField 타입 (ObjectId · Number · String) 확인
+- $group 에서 조인 대상 필드는 $first 로 전체 수집 후 $replaceRoot 로 루트 교체 — 필드 개별 나열 금지
+- kind:"query" 의 limit 및 kind:"aggregate" 파이프라인 마지막 stage 는 반드시 { "$limit": ${limit} }. aggregate 에서 누락 시 서버가 강제 주입`;
 }
 
 // ── MongoDB 클라이언트 ─────────────────────────────────────────────────────────
@@ -352,26 +348,150 @@ function withSensitiveFieldsUnset(pipeline: Document[]): Document[] {
   return [...pipeline, { $unset: SENSITIVE_FIELDS }];
 }
 
-// Chat 컨텍스트에서 온 요청이면 rows 를 브라우저로 SSE 스트림하고 Claude 에는 meta 만 돌려준다.
-// - UI 는 SSE 로 원본을 받는다 (전체 rows 는 브라우저까지 직결이므로 크기 상한 없음).
-// - Claude 가 보는 curl 응답은 rows·columns 를 제거한 meta 로 대체.
-// non-chat(직접 curl 호출 등) 요청은 원본 body 그대로 반환.
-function splitForChatContext(
-  requestId: string | undefined,
-  fullBody: Record<string, unknown>,
-): Record<string, unknown> | null {
-  if (!requestId) return null;
-  const send = chatSends.get(requestId);
-  if (!send) return null;
+// ── 내부 실행 함수 (HTTP 라우트 및 /chat 이 공유) ───────────────────────────
+// LLM 은 결과에 접근할 수 없으므로 splitForChatContext 는 삭제됨.
+// 실행 결과는 항상 full body (rows 포함) 를 반환. HTTP 라우트는 res.json 으로,
+// /chat 은 SSE 로 브라우저에 직접 전송.
 
-  send('result-data', fullBody as unknown as ResultDataEventPayload);
+interface QueryResultBody {
+  count: number;
+  data: Document[];
+  dbTimeMs: number;
+  columns: unknown[];
+  columnConfidence?: 'full' | 'partial';
+  unmappedKeys?: string[];
+  message?: string;
+  autoLimitedTo?: number;
+  retried?: 'stringToNumber' | 'idxToObj';
+}
 
-  // Claude 가 보는 meta: count/dbTimeMs/columnConfidence/unmappedKeys/message/autoLimitedTo/retried 만 유지
-  const { data: _data, columns: _columns, ...meta } = fullBody as Record<string, unknown> & {
-    data?: unknown;
-    columns?: unknown;
-  };
-  return meta;
+interface ExecuteQueryParams {
+  database: string;
+  collection: string;
+  filter: Document;
+  projection: Projection;
+  sort?: Sort;
+  limit: number;
+}
+
+interface ExecuteAggregateParams {
+  database: string;
+  collection: string;
+  pipeline: Document[];
+  limit: number;
+}
+
+async function executeQueryInternal(params: ExecuteQueryParams): Promise<{ body: QueryResultBody; effectiveFilter: Document }> {
+  const { database, collection, filter, projection, sort, limit } = params;
+  applyProjectionSecurity(projection);
+
+  const db: Db = mongoClient.db(database);
+  let effectiveFilter: Document = filter;
+  let convertedFilter = convertOid(filter) as Filter<Document>;
+  let retried: 'stringToNumber' | 'idxToObj' | undefined;
+
+  const dbStart: number = Date.now();
+
+  let totalCount: number = await db.collection(collection).countDocuments(convertedFilter, { maxTimeMS: DB_TIMEOUT_MS });
+
+  if (totalCount === 0) {
+    const attempts: Array<{ name: 'stringToNumber' | 'idxToObj'; filter: Document }> = [];
+    const numSwap = swapNumericStringsInFilter(filter);
+    if (numSwap.changed) attempts.push({ name: 'stringToNumber', filter: numSwap.value as Document });
+    const idxSwap = swapIdxToObjInFilter(filter);
+    if (idxSwap.changed) attempts.push({ name: 'idxToObj', filter: idxSwap.value as Document });
+
+    for (const attempt of attempts) {
+      const retryConverted = convertOid(attempt.filter) as Filter<Document>;
+      const retryCount: number = await db.collection(collection).countDocuments(retryConverted, { maxTimeMS: DB_TIMEOUT_MS });
+      if (retryCount > 0) {
+        console.log(`${ts()} [재쿼리]     ${attempt.name} → ${retryCount}건 발견 (collection=${collection})`);
+        effectiveFilter = attempt.filter;
+        convertedFilter = retryConverted;
+        totalCount = retryCount;
+        retried = attempt.name;
+        break;
+      }
+    }
+  }
+
+  if (totalCount === 0) {
+    const dbTimeMs: number = Date.now() - dbStart;
+    const emptyCols = buildColumnsFromQuery(collection, [], projection);
+    return {
+      body: {
+        count: 0,
+        data: [],
+        dbTimeMs,
+        message: '조회된 데이터가 없습니다.',
+        ...emptyCols,
+      },
+      effectiveFilter,
+    };
+  }
+
+  let cursor: FindCursor<WithId<Document>> = db
+    .collection(collection)
+    .find(convertedFilter, { projection: convertOid(projection) as Document })
+    .maxTimeMS(DB_TIMEOUT_MS);
+  if (sort) cursor = cursor.sort(sort);
+  const docs: WithId<Document>[] = await cursor.limit(limit).toArray();
+  const dbTimeMs: number = Date.now() - dbStart;
+
+  const cols = buildColumnsFromQuery(collection, docs, projection);
+  const body: QueryResultBody = { count: totalCount, data: docs, dbTimeMs, ...cols };
+  if (retried) body.retried = retried;
+  return { body, effectiveFilter };
+}
+
+async function executeAggregateInternal(params: ExecuteAggregateParams): Promise<{ body: QueryResultBody; autoLimited: boolean }> {
+  const { database, collection, pipeline, limit } = params;
+
+  const db: Db = mongoClient.db(database);
+  assertReadOnlyPipeline(pipeline);
+
+  const lastNonProject: Document | undefined = [...pipeline].reverse().find((s: Document) => !('$project' in s));
+  const hadTerminalLimit: boolean = lastNonProject != null && '$limit' in lastNonProject;
+  const effectivePipeline: Document[] = hadTerminalLimit
+    ? pipeline
+    : [...pipeline, { $limit: limit }];
+  const autoLimited: boolean = !hadTerminalLimit;
+
+  const execPipeline: Document[] = withSensitiveFieldsUnset(effectivePipeline);
+  const countPipeline: Document[] = [
+    ...pipelineForCount(effectivePipeline),
+    { $count: 'total' },
+  ];
+
+  const dbStart: number = Date.now();
+  const [countResult, docsResult]: [Document[], Document[]] = await Promise.all([
+    db.collection(collection).aggregate(convertOid(countPipeline) as Document[], { maxTimeMS: DB_TIMEOUT_MS }).toArray(),
+    db.collection(collection).aggregate(convertOid(execPipeline) as Document[], { maxTimeMS: DB_TIMEOUT_MS }).toArray(),
+  ]);
+  const totalCount: number = (countResult[0]?.total as number) ?? docsResult.length;
+  const docs: Document[] = docsResult;
+  const dbTimeMs: number = Date.now() - dbStart;
+
+  const analysis = analyzePipeline(collection, pipeline);
+
+  if (totalCount === 0) {
+    const emptyCols = buildColumnsFromPipeline(collection, [], analysis);
+    return {
+      body: {
+        count: 0,
+        data: [],
+        dbTimeMs,
+        message: '조회된 데이터가 없습니다.',
+        ...emptyCols,
+      },
+      autoLimited,
+    };
+  }
+
+  const cols = buildColumnsFromPipeline(collection, docs, analysis);
+  const body: QueryResultBody = { count: totalCount, data: docs, dbTimeMs, ...cols };
+  if (autoLimited) body.autoLimitedTo = limit;
+  return { body, autoLimited };
 }
 
 // ── 문자열↔숫자 자동 재쿼리 ───────────────────────────────────────────────────
@@ -477,6 +597,9 @@ function swapNumericStringsInFilter(value: unknown): { value: unknown; changed: 
 }
 
 // ── Claude 이벤트 핸들러 ──────────────────────────────────────────────────────
+// LLM 은 도구가 없으므로 tool_use · tool_result 이벤트는 발생하지 않음.
+// assistant text 이벤트에서 JSON 을 뽑아 SSE 로 진행 알림만 흘린다.
+// 실제 JSON 파싱과 실행은 /chat 이 result 이벤트의 result 필드 (최종 text) 로 처리.
 
 function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
   let systemSeen: boolean = false;
@@ -487,104 +610,74 @@ function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
         if (!systemSeen) {
           systemSeen = true;
           console.log(`${ts()} [준비]      Claude 세션 시작`);
-          send('progress', '준비 중...');
+          send('progress', '쿼리 생성 준비 중...');
         }
         break;
 
       case 'assistant': {
+        // LLM 이 텍스트를 만들기 시작함. 실제 JSON 파싱은 result 이벤트에서.
         const contents: ClaudeContentBlock[] = event.message?.content ?? [];
-        const hasToolUse: boolean = contents.some(b => b.type === 'tool_use');
-
-        if (hasToolUse) {
-          for (const block of contents) {
-            if (block.type !== 'tool_use' || block.name !== 'Bash') continue;
-            const cmd: string = block.input?.command?.trim() ?? '';
-            if (cmd.includes('/db-query') || cmd.includes('/db-aggregate')) {
-              const isAgg: boolean = cmd.includes('/db-aggregate');
-              const endpoint: '/db-query' | '/db-aggregate' = isAgg ? '/db-aggregate' : '/db-query';
-              console.log(`${ts()} [조회 시작]  DB ${isAgg ? '집계' : '쿼리'} 실행 중...`);
-              console.log(`             $ ${cmd}`);
-              send('progress', `조회 시작 — DB ${isAgg ? '집계' : '쿼리'} 실행 중...`);
-              const singleMatch: RegExpMatchArray | null = cmd.match(/-d\s+'([^']+)'/);
-              const doubleMatch: RegExpMatchArray | null = cmd.match(/-d\s+"((?:[^"\\]|\\.)*)"/);
-              const rawData: string | undefined = singleMatch?.[1] ?? doubleMatch?.[1]?.replace(/\\"/g, '"');
-              if (rawData) {
-                try {
-                  const parsedBody = JSON.parse(rawData) as Record<string, unknown>;
-                  // 구조화된 query 이벤트 — UI 가 파이프라인/필터 상세를 파싱해 사용할 수 있음
-                  send('query', { endpoint, requestBody: parsedBody } satisfies QueryEventPayload);
-                  // 공백 없는 압축 JSON — 사용자가 UI 로그에서 그대로 복사해 쿼리 에디터로 검증 가능하도록.
-                  send('log', JSON.stringify(parsedBody));
-                } catch {
-                  const collMatch: RegExpMatchArray | null = rawData.match(/["']collection["']\s*:\s*["']([^"']+)["']/);
-                  send('log', collMatch ? `collection: ${collMatch[1]}` : rawData);
-                }
-              } else {
-                const fallbackMatch: RegExpMatchArray | null = cmd.match(/["']collection["']\s*:\s*["']([^"']+)["']/);
-                if (fallbackMatch) send('log', `collection: ${fallbackMatch[1]}`);
-              }
-            } else if (cmd.startsWith('cat') && !cmd.includes('|')) {
-              // 순수 스키마 파일 읽기
-              const file: string | undefined = cmd.replace('cat', '').trim().split('/').pop();
-              console.log(`${ts()} [필드 확인]  ${file} 스키마 읽는 중...`);
-              send('progress', `필드 확인 — ${file} 스키마 읽는 중...`);
-              send('log', `$ cat ${file}`);
-            } else {
-              // jq·python 가공, 기타 명령
-              const label: string = cmd.includes('jq') || cmd.includes('python')
-                ? '결과 가공 중...'
-                : '실행 중...';
-              console.log(`${ts()} [실행]      $ ${cmd.slice(0, 80)}`);
-              send('progress', label);
-              send('log', `$ ${cmd.length > 120 ? cmd.slice(0, 120) + '...' : cmd}`);
-            }
-          }
-        }
-        // LLM 이 tool_result 이후 text 를 만들면(예: transactions 사전 확인 대화·오류 설명) 그대로 finalResult 로 흘러가 result 이벤트로 전달됨.
-        break;
-      }
-
-      case 'user': {
-        const blocks: ClaudeToolResultBlock[] = event.message?.content ?? [];
-        for (const block of blocks) {
-          if (block.type !== 'tool_result') continue;
-          const raw: string = typeof block.content === 'string'
-            ? block.content
-            : Array.isArray(block.content)
-              ? block.content.map(c => c.text ?? '').join('')
-              : '';
-          const text: string = raw.trim();
-          if (!text) break;
-          try {
-            const parsed = JSON.parse(text) as { count?: number; dbTimeMs?: number; error?: string };
-            if (typeof parsed.count === 'number') {
-              const dbSec: string = parsed.dbTimeMs != null
-                ? ` / DB실행: ${(parsed.dbTimeMs / 1000).toFixed(2)}초`
-                : '';
-              const detail: string = `${parsed.count}건 수신${dbSec}`;
-              console.log(`${ts()} [DB 응답 확인] ${detail}`);
-              send('progress', `DB 응답 확인 — ${detail}`);
-            } else if (typeof parsed.error === 'string') {
-              console.log(`${ts()} [DB 오류] ${parsed.error}`);
-              send('progress', `DB 오류 — ${parsed.error}`);
-            }
-            // count도 error도 없는 JSON(스키마 등) → 무시
-          } catch {
-            // JSON이 아닌 파일 내용(스키마 읽기 결과) → 무시
-          }
-        }
+        const hasText: boolean = contents.some(b => b.type === 'text');
+        if (hasText) send('progress', '쿼리 생성 중...');
         break;
       }
 
       case 'result':
         if (event.subtype === 'success') {
-          console.log(`${ts()} [응답 완료]  cost=$${event.cost_usd?.toFixed(4) ?? '?'}`);
+          console.log(`${ts()} [LLM 응답 완료] cost=$${event.cost_usd?.toFixed(4) ?? '?'}`);
         } else {
-          console.log(`${ts()} [실패]      subtype=${event.subtype}`);
+          console.log(`${ts()} [LLM 실패]  subtype=${event.subtype}`);
         }
         break;
     }
   };
+}
+
+// LLM 이 뱉는 최종 텍스트에서 JSON 추출.
+// - 이상적으로는 순수 JSON 하나만 나오지만, 방어적으로 코드펜스·앞뒤 텍스트를 허용.
+// - 첫 번째 { 부터 짝 맞는 } 까지 추출해 JSON.parse.
+function extractJsonFromText(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  // 코드펜스 제거
+  const stripped = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  const start = stripped.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < stripped.length; i += 1) {
+    const c = stripped[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\') { escape = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === '{') depth += 1;
+    else if (c === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        const jsonText = stripped.slice(start, i + 1);
+        try { return JSON.parse(jsonText); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+interface LlmQueryPayload {
+  kind: 'query' | 'aggregate';
+  collection?: string;
+  filter?: Document;
+  projection?: Projection;
+  sort?: Sort;
+  limit?: number;
+  pipeline?: Document[];
+}
+
+function isLlmQueryPayload(v: unknown): v is LlmQueryPayload {
+  if (v === null || typeof v !== 'object') return false;
+  const kind = (v as { kind?: unknown }).kind;
+  return kind === 'query' || kind === 'aggregate';
 }
 
 // ── Express 앱 ────────────────────────────────────────────────────────────────
@@ -595,10 +688,6 @@ app.use(express.static(path.join(import.meta.dirname, 'public')));
 
 const activeJobs: Map<string, ChildProcess> = new Map();
 const queryParamsStore: Map<string, QueryParams> = new Map();
-// requestId → SSE sender bound to an active /chat stream.
-// /db-query·/db-aggregate 는 chatSends 에 등록된 요청이면 rows 를 브라우저로 직접 스트림하고
-// curl 응답(=Claude 가 보는 tool_result) 에서 rows 를 뺀 meta 만 반환한다.
-const chatSends: Map<string, SendFn> = new Map();
 
 // ── 엔드포인트 ────────────────────────────────────────────────────────────────
 
@@ -624,97 +713,22 @@ app.get('/meta/erd', (_req: Request, res: Response) => {
 });
 
 app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Response) => {
-  const {
-    requestId,
-    database,
-    collection,
-    filter = {},
-    projection = {},
-    sort,
-    limit = 20,
-  } = req.body;
-
-  if (!collection) {
-    return res.status(400).json({ error: 'collection 필드가 필요합니다.' });
-  }
+  const { requestId, database, collection, filter = {}, projection = {}, sort, limit = 20 } = req.body;
+  if (!collection) return res.status(400).json({ error: 'collection 필드가 필요합니다.' });
 
   const targetDb: string = database ?? DB_DATABASE!;
   const qParams: QueryParams = { database: targetDb, collection, filter, projection, sort };
-  if (requestId && collection) queryParamsStore.set(requestId, qParams);
+  if (requestId) queryParamsStore.set(requestId, qParams);
   queryParamsStore.set('__latest__', qParams);
 
-  applyProjectionSecurity(projection);
-
   try {
-    const db: Db = mongoClient.db(targetDb);
-    let effectiveFilter: Document = filter;
-    let convertedFilter = convertOid(filter) as Filter<Document>;
-    let retried: 'stringToNumber' | 'idxToObj' | undefined;
-
-    const dbStart: number = Date.now();
-
-    // Step 1: 전체 건수 확인
-    let totalCount: number = await db.collection(collection).countDocuments(convertedFilter, { maxTimeMS: DB_TIMEOUT_MS });
-
-    // Step 1.5: 0건이면 몇 가지 자동 재쿼리 시도 (LLM 이 결과를 안 보므로 서버가 대응).
-    // (a) 숫자 형태의 문자열 → Number : "01012345678" → 1012345678
-    // (b) xxxIdx string → xxxObj ObjectId : {creatorIdx:"6929..."} → {creatorObj:{$oid:"6929..."}}
-    if (totalCount === 0) {
-      const attempts: Array<{ name: 'stringToNumber' | 'idxToObj'; filter: Document }> = [];
-      const numSwap = swapNumericStringsInFilter(filter);
-      if (numSwap.changed) attempts.push({ name: 'stringToNumber', filter: numSwap.value as Document });
-      const idxSwap = swapIdxToObjInFilter(filter);
-      if (idxSwap.changed) attempts.push({ name: 'idxToObj', filter: idxSwap.value as Document });
-
-      for (const attempt of attempts) {
-        const retryConverted = convertOid(attempt.filter) as Filter<Document>;
-        const retryCount: number = await db.collection(collection).countDocuments(retryConverted, { maxTimeMS: DB_TIMEOUT_MS });
-        if (retryCount > 0) {
-          console.log(`${ts()} [재쿼리]     ${attempt.name} → ${retryCount}건 발견 (collection=${collection})`);
-          effectiveFilter = attempt.filter;
-          convertedFilter = retryConverted;
-          totalCount = retryCount;
-          retried = attempt.name;
-          break;
-        }
-      }
-    }
-
-    if (totalCount === 0) {
-      const dbTimeMs: number = Date.now() - dbStart;
-      const emptyCols = buildColumnsFromQuery(collection, [], projection);
-      const body = {
-        count: 0,
-        data: [],
-        dbTimeMs,
-        message: '조회된 데이터가 없습니다.',
-        ...emptyCols,
-      };
-      const meta = splitForChatContext(requestId, body);
-      return res.json(meta ?? body);
-    }
-
-    // Step 2: 건수 기반 limit 적용하여 본 쿼리 실행
-    let cursor: FindCursor<WithId<Document>> = db
-      .collection(collection)
-      .find(convertedFilter, { projection: convertOid(projection) as Document })
-      .maxTimeMS(DB_TIMEOUT_MS);
-    if (sort) cursor = cursor.sort(sort);
-    const docs: WithId<Document>[] = await cursor.limit(limit).toArray();
-    const dbTimeMs: number = Date.now() - dbStart;
-
-    // 재시도로 필터가 바뀌었다면 내보내기용 저장 파라미터도 새 필터로 갱신
-    if (retried && requestId) {
+    const { body, effectiveFilter } = await executeQueryInternal({ database: targetDb, collection, filter, projection, sort, limit });
+    if (body.retried && requestId) {
       const updated: QueryParams = { database: targetDb, collection, filter: effectiveFilter, projection, sort };
       queryParamsStore.set(requestId, updated);
       queryParamsStore.set('__latest__', updated);
     }
-
-    const cols = buildColumnsFromQuery(collection, docs, projection);
-    const fullBody: Record<string, unknown> = { count: totalCount, data: docs, dbTimeMs, ...cols };
-    if (retried) fullBody.retried = retried;
-    const meta = splitForChatContext(requestId, fullBody);
-    return res.json(meta ?? fullBody);
+    return res.json(body);
   } catch (err) {
     if (isTimeoutError(err)) {
       console.warn(`${ts()} [타임아웃] ${DB_TIMEOUT_MSG} — ${collection}`);
@@ -726,76 +740,21 @@ app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Res
 });
 
 app.post('/db-aggregate', async (req: Request<object, object, DbAggregateBody>, res: Response) => {
-  const {
-    requestId,
-    database,
-    collection,
-    pipeline = [],
-    limit = 20,
-  } = req.body;
-
-  if (!collection) {
-    return res.status(400).json({ error: 'collection 필드가 필요합니다.' });
-  }
-  if (!Array.isArray(pipeline) || pipeline.length === 0) {
-    return res.status(400).json({ error: 'pipeline 배열이 필요합니다.' });
-  }
+  const { requestId, database, collection, pipeline = [], limit = 20 } = req.body;
+  if (!collection) return res.status(400).json({ error: 'collection 필드가 필요합니다.' });
+  if (!Array.isArray(pipeline) || pipeline.length === 0) return res.status(400).json({ error: 'pipeline 배열이 필요합니다.' });
 
   const targetDb: string = database ?? DB_DATABASE!;
 
   try {
-    const db: Db = mongoClient.db(targetDb);
     const pipelineArr: Document[] = pipeline as Document[];
-    assertReadOnlyPipeline(pipelineArr);
+    const { body } = await executeAggregateInternal({ database: targetDb, collection, pipeline: pipelineArr, limit });
 
-    // terminal $limit 이 없으면 서버가 강제 주입 — 브라우저·DB 부하 방어용 안전장치
-    const lastNonProject: Document | undefined = [...pipelineArr].reverse().find((s: Document) => !('$project' in s));
-    const hadTerminalLimit: boolean = lastNonProject != null && '$limit' in lastNonProject;
-    const effectivePipeline: Document[] = hadTerminalLimit
-      ? pipelineArr
-      : [...pipelineArr, { $limit: limit }];
-    const autoLimited: boolean = !hadTerminalLimit;
-
-    const execPipeline: Document[] = withSensitiveFieldsUnset(effectivePipeline);
-    const countPipeline: Document[] = [
-      ...pipelineForCount(effectivePipeline),
-      { $count: 'total' },
-    ];
-
-    const dbStart: number = Date.now();
-    const [countResult, docsResult]: [Document[], Document[]] = await Promise.all([
-      db.collection(collection).aggregate(convertOid(countPipeline) as Document[], { maxTimeMS: DB_TIMEOUT_MS }).toArray(),
-      db.collection(collection).aggregate(convertOid(execPipeline) as Document[], { maxTimeMS: DB_TIMEOUT_MS }).toArray(),
-    ]);
-    const totalCount: number = (countResult[0]?.total as number) ?? docsResult.length;
-    const docs: Document[] = docsResult;
-
-    const dbTimeMs: number = Date.now() - dbStart;
-
-    // 내보내기 재실행을 위해 원본(주입 전) pipeline을 저장
     const aggParams: QueryParams = { database: targetDb, collection, filter: {}, projection: {}, pipeline: pipelineArr };
     if (requestId) queryParamsStore.set(requestId, aggParams);
     queryParamsStore.set('__latest__', aggParams);
 
-    const analysis = analyzePipeline(collection, pipelineArr);
-
-    if (totalCount === 0) {
-      const emptyCols = buildColumnsFromPipeline(collection, [], analysis);
-      const emptyBody = {
-        count: 0,
-        data: [],
-        dbTimeMs,
-        message: '조회된 데이터가 없습니다.',
-        ...emptyCols,
-      };
-      const meta = splitForChatContext(requestId, emptyBody);
-      return res.json(meta ?? emptyBody);
-    }
-    const cols = buildColumnsFromPipeline(collection, docs, analysis);
-    const body: Record<string, unknown> = { count: totalCount, data: docs, dbTimeMs, ...cols };
-    if (autoLimited) body.autoLimitedTo = limit;
-    const meta = splitForChatContext(requestId, body);
-    return res.json(meta ?? body);
+    return res.json(body);
   } catch (err) {
     if (isTimeoutError(err)) {
       console.warn(`${ts()} [타임아웃] ${DB_TIMEOUT_MSG} — ${collection}`);
@@ -874,19 +833,12 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
-  // result-data 를 한 번이라도 흘렸다면 LLM 이 마지막에 짧은 요약("N건 조회되었습니다") 을 만들어도 억제한다.
-  // 데이터 요약은 UI 표가 담당 — 최종 result 이벤트는 사전 확인 대화나 오류 설명 용도로만 쓴다.
-  let resultDataSent = false;
-
   const send: SendFn = (type: SseEventType, msg: unknown): void => {
-    if (type === 'result-data') resultDataSent = true;
     const payload = typeof msg === 'string'
       ? { type, message: msg }
       : { type, data: msg };
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
-
-  if (requestId) chatSends.set(requestId, send);
 
   console.log(`\n${'─'.repeat(60)}`);
   console.log(`[요청] ${message.trim()}`);
@@ -896,11 +848,14 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
     'claude',
     [
       '-p', message.trim(),
-      '--allowedTools', 'Bash',
-      '--system-prompt', buildSystemPrompt(requestId ?? '', limit),
+      // 도구 전면 차단 — allowlist 에 존재하지 않는 이름만 넣어 실질적으로 어떤 도구도 허용하지 않는다.
+      // denylist 방식은 미래에 새 도구가 추가되면 자동 허용될 위험이 있어 allowlist 로 잠근다.
+      // 목적: LLM 이 DB 응답/스키마/파일/네트워크 어떤 채널로도 결과를 볼 수 없게 한다.
+      '--allowedTools', '__none__',
+      '--system-prompt', buildSystemPrompt(limit),
       '--output-format', 'stream-json',
       '--verbose',
-      '--max-turns', CLAUDE_MAX_TURNS,
+      '--max-turns', '1',
       '--model', CLAUDE_MODEL,
     ],
     { stdio: ['ignore', 'pipe', 'pipe'], env: CLAUDE_CHILD_ENV }
@@ -932,25 +887,94 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
 
   child.stderr!.on('data', (data: Buffer) => { stderr += data.toString(); });
 
-  child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-    if (requestId) {
-      activeJobs.delete(requestId);
-      chatSends.delete(requestId);
-    }
+  child.on('close', async (code: number | null, signal: NodeJS.Signals | null) => {
+    if (requestId) activeJobs.delete(requestId);
+
     if (signal === 'SIGKILL' || signal === 'SIGTERM') {
       send('cancelled', '조회가 중지되었습니다.');
-    } else if (code !== 0 && !finalResult) {
+      res.write('data: [DONE]\n\n');
+      res.end();
+      console.log(`${'─'.repeat(60)}\n`);
+      return;
+    }
+
+    if (code !== 0 && !finalResult) {
       console.error('[오류] Claude 프로세스 실패 (exit code:', code, ')');
       console.error(stderr);
       send('error', 'Claude 프로세스 실행 실패: ' + stderr.slice(0, 200));
-    } else {
-      // 쿼리가 성공적으로 실행되어 rows 를 UI 로 흘렸다면 LLM 텍스트는 억제.
-      const outText: string = resultDataSent ? '' : finalResult.trim();
-      send('result', outText);
+      res.write('data: [DONE]\n\n');
+      res.end();
+      console.log(`${'─'.repeat(60)}\n`);
+      return;
     }
-    console.log(`${'─'.repeat(60)}\n`);
+
+    // LLM 이 뱉은 텍스트에서 JSON 추출 → 서버가 직접 실행 → SSE 로 브라우저에 결과 전송.
+    const parsed = extractJsonFromText(finalResult);
+    if (!isLlmQueryPayload(parsed)) {
+      console.error(`[오류] LLM 출력에서 유효한 쿼리 JSON 을 찾지 못함. 원문 앞머리: ${finalResult.slice(0, 200)}`);
+      send('error', 'LLM 이 쿼리 JSON 을 만들지 못했습니다. 다시 시도해 주세요.');
+      res.write('data: [DONE]\n\n');
+      res.end();
+      console.log(`${'─'.repeat(60)}\n`);
+      return;
+    }
+
+    // 구조화된 query 이벤트 (UI 로그·에디터에서 활용)
+    const endpoint: '/db-query' | '/db-aggregate' = parsed.kind === 'aggregate' ? '/db-aggregate' : '/db-query';
+    send('query', { endpoint, requestBody: parsed as unknown as Record<string, unknown> } satisfies QueryEventPayload);
+    send('log', JSON.stringify(parsed));
+    send('progress', `조회 시작 — DB ${parsed.kind === 'aggregate' ? '집계' : '쿼리'} 실행 중...`);
+    console.log(`${ts()} [조회 시작]  ${endpoint}`);
+
+    try {
+      if (parsed.kind === 'query') {
+        if (!parsed.collection) throw new Error('collection 필드 누락');
+        const filter: Document = parsed.filter ?? {};
+        const projection: Projection = parsed.projection ?? {};
+        const targetDb: string = DB_DATABASE!;
+        const { body, effectiveFilter } = await executeQueryInternal({
+          database: targetDb,
+          collection: parsed.collection,
+          filter,
+          projection,
+          sort: parsed.sort,
+          limit: parsed.limit ?? limit,
+        });
+        if (requestId) {
+          const qp: QueryParams = { database: targetDb, collection: parsed.collection, filter: effectiveFilter, projection, sort: parsed.sort };
+          queryParamsStore.set(requestId, qp);
+          queryParamsStore.set('__latest__', qp);
+        }
+        send('result-data', body as unknown as ResultDataEventPayload);
+        send('progress', `DB 응답 완료 — ${body.count}건 / ${(body.dbTimeMs / 1000).toFixed(2)}초`);
+      } else {
+        if (!parsed.collection) throw new Error('collection 필드 누락');
+        if (!Array.isArray(parsed.pipeline) || parsed.pipeline.length === 0) throw new Error('pipeline 배열 누락');
+        const targetDb: string = DB_DATABASE!;
+        const { body } = await executeAggregateInternal({
+          database: targetDb,
+          collection: parsed.collection,
+          pipeline: parsed.pipeline,
+          limit: parsed.limit ?? limit,
+        });
+        if (requestId) {
+          const qp: QueryParams = { database: targetDb, collection: parsed.collection, filter: {}, projection: {}, pipeline: parsed.pipeline };
+          queryParamsStore.set(requestId, qp);
+          queryParamsStore.set('__latest__', qp);
+        }
+        send('result-data', body as unknown as ResultDataEventPayload);
+        send('progress', `DB 응답 완료 — ${body.count}건 / ${(body.dbTimeMs / 1000).toFixed(2)}초`);
+      }
+      send('result', '');
+    } catch (err) {
+      const msg: string = isTimeoutError(err) ? DB_TIMEOUT_MSG : (err as Error).message;
+      console.error(`[DB 오류] ${msg}`);
+      send('error', `DB 오류 — ${msg}`);
+    }
+
     res.write('data: [DONE]\n\n');
     res.end();
+    console.log(`${'─'.repeat(60)}\n`);
   });
 
   child.on('error', (err: NodeJS.ErrnoException) => {

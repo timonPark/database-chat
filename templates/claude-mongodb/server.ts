@@ -5,6 +5,7 @@ import { MongoClient, ObjectId, Decimal128, Document, Filter, Sort, Db, FindCurs
 import type { Server } from 'http';
 import fs from 'fs';
 import path from 'path';
+import { loadAllSchemas } from './scripts/load-schema-index.js';
 
 // ── 환경 변수 ──────────────────────────────────────────────────────────────────
 
@@ -149,6 +150,14 @@ try {
   } catch {
     console.warn(`컬렉션 매핑 파일도 읽을 수 없습니다: ${COLLECTION_MAPPING_FILE}`);
   }
+}
+
+const schemaLoadResult = loadAllSchemas(COLLECTIONS_DIR);
+if (schemaLoadResult.total === 0) {
+  console.warn(`컬렉션 스키마 디렉토리가 비어있거나 없습니다: ${COLLECTIONS_DIR} (fallback: 원본 key 노출)`);
+} else {
+  const failedSuffix = schemaLoadResult.failed > 0 ? ` (실패 ${schemaLoadResult.failed}건)` : '';
+  console.log(`컬렉션 스키마 인덱스 로드 완료: ${schemaLoadResult.loaded}/${schemaLoadResult.total}${failedSuffix}`);
 }
 
 function loadCollectionIndex(): string {

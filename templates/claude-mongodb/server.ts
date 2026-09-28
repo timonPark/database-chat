@@ -103,8 +103,7 @@ interface ResultDataEventPayload {
   unmappedKeys: string[];
   dbTimeMs: number;
   autoLimitedTo?: number;
-  truncatedTo?: number;
-  truncatedFrom?: number;
+  retried?: 'stringToNumber' | 'idxToObj';
 }
 
 // Claude stream-json 이벤트 타입
@@ -243,9 +242,8 @@ ${buildCollectionGuide()}
 - $lookup 사용 시 반드시 $group으로 중복 제거 (1:N 조인 시 중복 발생)
 - $lookup 대상은 같은 database의 컬렉션만 가능하며, 조인 대상 foreignField에 맞는 필드 타입(ObjectId/Number/String)을 확인한다
 - $group에서 조인 대상 필드는 $first로 전체 수집 후 $replaceRoot로 루트 교체 — 필드를 개별 나열하지 말 것
-- /db-query 의 limit 필드 및 /db-aggregate 파이프라인 마지막 stage는 반드시 { "$limit": ${limit} } 로 명시한다. aggregate 에서 $limit 누락 시 서버가 강제 주입하며 응답에 autoLimitedTo 필드가 포함됨 — 그 경우 재쿼리 금지
-- 응답은 rows 를 포함하지 않는 meta({count, dbTimeMs, columnConfidence, unmappedKeys}) 만 반환된다. 응답값을 사용자에게 나열하지 말 것 — 서버가 UI 로 직접 표를 스트림한다
-- 숫자로도 문자열로도 저장 가능한 값(전화번호·사번·주민등록번호 등)은 우선 값 그대로 조회한 뒤 결과가 0건이면 타입을 반대로 바꿔 한 번 더 재시도한다. 예) "01012345678"로 검색해 count=0 이면 즉시 숫자 01012345678(선행 0 제거된 정수)로 재조회
+- /db-query 의 limit 필드 및 /db-aggregate 파이프라인 마지막 stage는 반드시 { "$limit": ${limit} } 로 명시한다. aggregate 에서 $limit 누락 시 서버가 강제 주입
+- 응답은 rows 를 포함하지 않는 meta({count, dbTimeMs, columnConfidence, unmappedKeys}) 만 반환된다. 서버가 UI 로 직접 표를 스트림하므로 결과 나열 금지
 - 오류 발생 시 짧게 원인만 전달 (예: "collection 필드 누락"). 정상 응답이면 아무 말도 하지 말고 종료
 - 거래 내역(transactions) 조회 요청 시 쿼리 실행 전에 반드시 먼저 물어본다: "요약(계좌별 거래 건수 합계)으로 보시겠어요, 아니면 개별 거래 건 단위(로우)로 보시겠어요?" — 사용자가 답하면 그에 맞게 쿼리한다`;
 }
@@ -354,9 +352,9 @@ function withSensitiveFieldsUnset(pipeline: Document[]): Document[] {
 }
 
 // Chat 컨텍스트에서 온 요청이면 rows 를 브라우저로 SSE 스트림하고 Claude 에는 meta 만 돌려준다.
-// - UI 는 SSE 로 원본(uncapped) 을 받는다. capForToolOutput 은 LLM 8KB 상한 대응이므로 이 경로에서는 스킵.
+// - UI 는 SSE 로 원본을 받는다 (전체 rows 는 브라우저까지 직결이므로 크기 상한 없음).
 // - Claude 가 보는 curl 응답은 rows·columns 를 제거한 meta 로 대체.
-// non-chat(직접 curl 호출 등) 요청은 원본 body 그대로 반환 (capForToolOutput 은 호출자가 감쌀 것).
+// non-chat(직접 curl 호출 등) 요청은 원본 body 그대로 반환.
 function splitForChatContext(
   requestId: string | undefined,
   fullBody: Record<string, unknown>,
@@ -367,43 +365,111 @@ function splitForChatContext(
 
   send('result-data', fullBody as unknown as ResultDataEventPayload);
 
-  // Claude 가 보는 meta: count/dbTimeMs/columnConfidence/unmappedKeys/message/autoLimitedTo 만 유지
-  const {
-    data: _data,
-    columns: _columns,
-    truncatedTo: _t1,
-    truncatedFrom: _t2,
-    hint: _hint,
-    ...meta
-  } = fullBody as Record<string, unknown> & { data?: unknown; columns?: unknown; truncatedTo?: number; truncatedFrom?: number; hint?: string };
+  // Claude 가 보는 meta: count/dbTimeMs/columnConfidence/unmappedKeys/message/autoLimitedTo/retried 만 유지
+  const { data: _data, columns: _columns, ...meta } = fullBody as Record<string, unknown> & {
+    data?: unknown;
+    columns?: unknown;
+  };
   return meta;
 }
 
-// LLM tool 출력 한도(약 8KB, 여유 마진 포함)에 맞춰 응답 body를 자동 축약.
-const TOOL_OUTPUT_MAX_BYTES: number = 6500;
+// ── 문자열↔숫자 자동 재쿼리 ───────────────────────────────────────────────────
+// 사용자가 "01012345678" 같은 문자열로 검색했는데 실제로는 숫자로 저장되어 있을 때 대응.
+// count === 0 이면 filter 트리에서 숫자 형태의 문자열을 찾아 Number 로 변환 후 1회 재시도.
+// LLM 이 결과를 안 보므로 이 로직이 서버에 있어야 재시도가 결정론적으로 일어난다.
+const NUMERIC_STRING_REGEX = /^0?\d+$/;
 
-function capForToolOutput(body: Record<string, unknown>, maxBytes: number = TOOL_OUTPUT_MAX_BYTES): Record<string, unknown> {
-  const data = body.data;
-  if (!Array.isArray(data) || data.length === 0) return body;
-  const wrapper: Record<string, unknown> = { ...body, data: [] };
-  const wrapperSize: number = Buffer.byteLength(JSON.stringify(wrapper), 'utf8');
-  let usedBytes: number = wrapperSize;
-  let kept: number = 0;
-  for (const item of data) {
-    const itemBytes: number = Buffer.byteLength(JSON.stringify(item), 'utf8') + 1;
-    if (usedBytes + itemBytes > maxBytes) break;
-    usedBytes += itemBytes;
-    kept++;
+// Extended JSON atomic marker / meta 연산자 — 이 키를 만나면 하위 값은 그대로 둔다.
+// $in·$eq·$and 등 사용자 값이 들어가는 연산자는 계속 재귀.
+const NO_RECURSE_OPS = new Set([
+  '$oid', '$date', '$numberDecimal', '$numberLong', '$binary', '$timestamp',
+  '$regex', '$options', '$type', '$exists', '$size', '$mod',
+]);
+
+const OID_HEX_REGEX_FULL = /^[0-9a-fA-F]{24}$/;
+
+function isHex(v: unknown): v is string {
+  return typeof v === 'string' && OID_HEX_REGEX_FULL.test(v);
+}
+
+// xxxIdx(string) 값을 xxxObj(ObjectId) 로 rename + wrap 시도.
+// - `{keyIdx: "hex24"}` → `{keyObj: {$oid: "hex24"}}`
+// - `{keyIdx: {$eq: "hex24"}}` → `{keyObj: {$oid: "hex24"}}`
+// - `{keyIdx: {$in: ["hex", ...]}}` → `{keyObj: {$in: [{$oid:"hex"},...]}}`
+// 스키마 상 Idx 로 나와있어 LLM 이 string 으로 쿼리했지만 실제 DB 는 Obj 로 저장된 경우 대응.
+function tryIdxToObjRewrite(key: string, value: unknown): { key: string; value: unknown } | null {
+  if (!key.endsWith('Idx')) return null;
+  const newKey = `${key.slice(0, -3)}Obj`;
+  if (isHex(value)) return { key: newKey, value: { $oid: value } };
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 1) {
+      const [op, val] = entries[0];
+      if (op === '$eq' && isHex(val)) return { key: newKey, value: { $oid: val } };
+      if (op === '$in' && Array.isArray(val) && val.length > 0 && val.every(isHex)) {
+        return { key: newKey, value: { $in: (val as string[]).map((h) => ({ $oid: h })) } };
+      }
+    }
   }
-  if (kept >= data.length) return body;
-  const originalCount: number = data.length;
-  return {
-    ...body,
-    data: data.slice(0, kept),
-    truncatedTo: kept,
-    truncatedFrom: originalCount,
-    hint: `LLM tool 출력 한도(약 8KB) 대응: 요청한 ${originalCount}건 중 상위 ${kept}건만 전송. 재쿼리·재실행 금지. 이 결과 그대로 사용자에게 응답하세요. 더 많은 필드가 필요하면 다음 시도에서 $project로 필드를 줄이거나 limit을 낮추세요.`,
-  };
+  return null;
+}
+
+function swapIdxToObjInFilter(value: unknown): { value: unknown; changed: boolean } {
+  if (Array.isArray(value)) {
+    const rs = value.map(swapIdxToObjInFilter);
+    return { value: rs.map((r) => r.value), changed: rs.some((r) => r.changed) };
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 1 && NO_RECURSE_OPS.has(entries[0][0])) {
+      return { value, changed: false };
+    }
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of entries) {
+      const rewrite = tryIdxToObjRewrite(k, v);
+      if (rewrite) {
+        out[rewrite.key] = rewrite.value;
+        changed = true;
+        continue;
+      }
+      const r = swapIdxToObjInFilter(v);
+      out[k] = r.value;
+      if (r.changed) changed = true;
+    }
+    return { value: out, changed };
+  }
+  return { value, changed: false };
+}
+
+// 변환 대상: 6자리 이상 && 숫자만 구성된 문자열. 전화번호·사번·주민등록번호 등 커버.
+function swapNumericStringsInFilter(value: unknown): { value: unknown; changed: boolean } {
+  if (Array.isArray(value)) {
+    const results = value.map(swapNumericStringsInFilter);
+    return {
+      value: results.map((r) => r.value),
+      changed: results.some((r) => r.changed),
+    };
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 1 && NO_RECURSE_OPS.has(entries[0][0])) {
+      return { value, changed: false };
+    }
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of entries) {
+      const r = swapNumericStringsInFilter(v);
+      out[k] = r.value;
+      if (r.changed) changed = true;
+    }
+    return { value: out, changed };
+  }
+  if (typeof value === 'string' && value.length >= 6 && NUMERIC_STRING_REGEX.test(value)) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return { value: n, changed: true };
+  }
+  return { value, changed: false };
 }
 
 // ── Claude 이벤트 핸들러 ──────────────────────────────────────────────────────
@@ -577,12 +643,38 @@ app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Res
 
   try {
     const db: Db = mongoClient.db(targetDb);
-    const convertedFilter = convertOid(filter) as Filter<Document>;
+    let effectiveFilter: Document = filter;
+    let convertedFilter = convertOid(filter) as Filter<Document>;
+    let retried: 'stringToNumber' | 'idxToObj' | undefined;
 
     const dbStart: number = Date.now();
 
     // Step 1: 전체 건수 확인
-    const totalCount: number = await db.collection(collection).countDocuments(convertedFilter, { maxTimeMS: DB_TIMEOUT_MS });
+    let totalCount: number = await db.collection(collection).countDocuments(convertedFilter, { maxTimeMS: DB_TIMEOUT_MS });
+
+    // Step 1.5: 0건이면 몇 가지 자동 재쿼리 시도 (LLM 이 결과를 안 보므로 서버가 대응).
+    // (a) 숫자 형태의 문자열 → Number : "01012345678" → 1012345678
+    // (b) xxxIdx string → xxxObj ObjectId : {creatorIdx:"6929..."} → {creatorObj:{$oid:"6929..."}}
+    if (totalCount === 0) {
+      const attempts: Array<{ name: 'stringToNumber' | 'idxToObj'; filter: Document }> = [];
+      const numSwap = swapNumericStringsInFilter(filter);
+      if (numSwap.changed) attempts.push({ name: 'stringToNumber', filter: numSwap.value as Document });
+      const idxSwap = swapIdxToObjInFilter(filter);
+      if (idxSwap.changed) attempts.push({ name: 'idxToObj', filter: idxSwap.value as Document });
+
+      for (const attempt of attempts) {
+        const retryConverted = convertOid(attempt.filter) as Filter<Document>;
+        const retryCount: number = await db.collection(collection).countDocuments(retryConverted, { maxTimeMS: DB_TIMEOUT_MS });
+        if (retryCount > 0) {
+          console.log(`${ts()} [재쿼리]     ${attempt.name} → ${retryCount}건 발견 (collection=${collection})`);
+          effectiveFilter = attempt.filter;
+          convertedFilter = retryConverted;
+          totalCount = retryCount;
+          retried = attempt.name;
+          break;
+        }
+      }
+    }
 
     if (totalCount === 0) {
       const dbTimeMs: number = Date.now() - dbStart;
@@ -607,12 +699,18 @@ app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Res
     const docs: WithId<Document>[] = await cursor.limit(limit).toArray();
     const dbTimeMs: number = Date.now() - dbStart;
 
+    // 재시도로 필터가 바뀌었다면 내보내기용 저장 파라미터도 새 필터로 갱신
+    if (retried && requestId) {
+      const updated: QueryParams = { database: targetDb, collection, filter: effectiveFilter, projection, sort };
+      queryParamsStore.set(requestId, updated);
+      queryParamsStore.set('__latest__', updated);
+    }
+
     const cols = buildColumnsFromQuery(collection, docs, projection);
-    const fullBody = { count: totalCount, data: docs, dbTimeMs, ...cols };
+    const fullBody: Record<string, unknown> = { count: totalCount, data: docs, dbTimeMs, ...cols };
+    if (retried) fullBody.retried = retried;
     const meta = splitForChatContext(requestId, fullBody);
-    if (meta) return res.json(meta);
-    // 직접 curl 호출자(non-chat) 에게만 LLM 상한 대응 축약을 적용
-    return res.json(capForToolOutput(fullBody));
+    return res.json(meta ?? fullBody);
   } catch (err) {
     if (isTimeoutError(err)) {
       console.warn(`${ts()} [타임아웃] ${DB_TIMEOUT_MSG} — ${collection}`);
@@ -646,7 +744,7 @@ app.post('/db-aggregate', async (req: Request<object, object, DbAggregateBody>, 
     const pipelineArr: Document[] = pipeline as Document[];
     assertReadOnlyPipeline(pipelineArr);
 
-    // terminal $limit이 없으면 서버가 강제 주입 — LLM tool 출력 크기 한도 초과 방지
+    // terminal $limit 이 없으면 서버가 강제 주입 — 브라우저·DB 부하 방어용 안전장치
     const lastNonProject: Document | undefined = [...pipelineArr].reverse().find((s: Document) => !('$project' in s));
     const hadTerminalLimit: boolean = lastNonProject != null && '$limit' in lastNonProject;
     const effectivePipeline: Document[] = hadTerminalLimit
@@ -691,13 +789,9 @@ app.post('/db-aggregate', async (req: Request<object, object, DbAggregateBody>, 
     }
     const cols = buildColumnsFromPipeline(collection, docs, analysis);
     const body: Record<string, unknown> = { count: totalCount, data: docs, dbTimeMs, ...cols };
-    if (autoLimited) {
-      body.autoLimitedTo = limit;
-      body.message = `pipeline 끝에 $limit 이 없어 서버가 자동으로 { $limit: ${limit} } 을 부착했습니다. 총 ${totalCount}건 중 상위 ${docs.length}건만 반환. 재쿼리 금지.`;
-    }
+    if (autoLimited) body.autoLimitedTo = limit;
     const meta = splitForChatContext(requestId, body);
-    if (meta) return res.json(meta);
-    return res.json(capForToolOutput(body));
+    return res.json(meta ?? body);
   } catch (err) {
     if (isTimeoutError(err)) {
       console.warn(`${ts()} [타임아웃] ${DB_TIMEOUT_MSG} — ${collection}`);

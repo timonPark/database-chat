@@ -888,10 +888,22 @@
       if (isNaN(d.getTime())) return escapeHtml(String(v));
       const parts = new Intl.DateTimeFormat('ko-KR', {
         timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', hour12: false,
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
       }).formatToParts(d);
       const get = (t) => parts.find(p => p.type === t)?.value ?? '';
-      return `<span class="cell-mono">${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}</span>`;
+      return `<span class="cell-mono">${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}</span>`;
+    }
+
+    // *Ts / *_ts / *_at 필드는 스키마 상 number 로 저장되지만 unix ms 타임스탬프이므로 date 로 렌더.
+    function isTimestampKey(key) {
+      if (!key) return false;
+      const leaf = key.includes('.') ? key.split('.').pop() : key;
+      return /(Ts|_ts|_at)$/i.test(leaf);
+    }
+
+    function looksLikeUnixMs(v) {
+      const n = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(n) && n >= 1e12 && n < 4e13;
     }
 
     function fmtDecimal(v) {
@@ -919,8 +931,10 @@
         + `<div class="nested-json" id="${id}">${escapeHtml(json)}</div>`;
     }
 
-    function renderCell(value, type) {
+    function renderCell(value, type, key) {
       if (value === null || value === undefined) return `<span class="cell-null">—</span>`;
+      // 타임스탬프 힌트: schema type=number 지만 이름이 *Ts/*_at 이고 값이 unix ms 형태면 date
+      if (isTimestampKey(key) && looksLikeUnixMs(value)) return fmtDate(value);
       const t = (type || 'unknown').toLowerCase();
       if (t === 'objectid') return fmtOid(value);
       if (t === 'date') return fmtDate(value);
@@ -1014,7 +1028,7 @@
         for (const col of cols) {
           const td = document.createElement('td');
           const val = getNestedValue(row, col.key);
-          td.innerHTML = renderCell(val, col.type);
+          td.innerHTML = renderCell(val, col.type, col.key);
           tr.appendChild(td);
         }
         tbody.appendChild(tr);

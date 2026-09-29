@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Claude Mongo Chat</title>
+  <title>Gemini Mongo Chat</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
@@ -322,6 +322,143 @@
       word-break: break-word;
     }
 
+    .result-data {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .result-badges {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 0.78rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 10px;
+      background: #1a2a4a;
+      color: #a0c4e0;
+      border: 1px solid #2a4a6a;
+    }
+
+    .badge.partial {
+      background: #3a2f1a;
+      color: #d9c07a;
+      border-color: #5a4a2a;
+    }
+
+    .empty-card {
+      padding: 16px 18px;
+      background: #1a2a3a;
+      border: 1px solid #2a4a6a;
+      border-radius: 8px;
+      color: #7ab3e0;
+      font-size: 0.88rem;
+      text-align: center;
+    }
+
+    .result-table-wrap {
+      overflow-x: auto;
+      overflow-y: auto;
+      max-height: 480px;
+      border: 1px solid #2a3a5a;
+      border-radius: 8px;
+      background: #0f1a2e;
+    }
+
+    table.result-table {
+      border-collapse: separate;
+      border-spacing: 0;
+      width: max-content;
+      min-width: 100%;
+      font-size: 0.82rem;
+    }
+
+    table.result-table th,
+    table.result-table td {
+      padding: 6px 10px;
+      border-bottom: 1px solid #1a2a4a;
+      border-right: 1px solid #1a2a4a;
+      text-align: left;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+
+    table.result-table th {
+      position: sticky;
+      top: 0;
+      background: #1a2a4a;
+      color: #b0d4f0;
+      font-weight: 600;
+      font-size: 0.78rem;
+      z-index: 1;
+    }
+
+    table.result-table th.unmapped {
+      background: #2a2a3a;
+      color: #8899aa;
+    }
+
+    table.result-table th .th-key {
+      display: block;
+      font-family: monospace;
+      font-size: 0.68rem;
+      color: #6a8ab0;
+      font-weight: normal;
+      margin-top: 2px;
+    }
+
+    table.result-table th.unmapped .th-key { color: #667788; }
+
+    table.result-table tr:nth-child(even) td { background: #131e33; }
+    table.result-table tr:hover td { background: #1a2540; }
+
+    .cell-oid, .cell-mono {
+      font-family: monospace;
+      font-size: 0.78rem;
+      color: #a0c4e0;
+    }
+
+    .cell-bool-t { color: #6ab86a; }
+    .cell-bool-f { color: #b86a6a; }
+    .cell-null { color: #556; }
+
+    .cell-nested {
+      background: none;
+      border: none;
+      padding: 0;
+      color: #7ab3e0;
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-family: inherit;
+    }
+
+    .cell-nested:hover { text-decoration: underline; }
+
+    .nested-json {
+      display: none;
+      margin-top: 4px;
+      padding: 6px 8px;
+      background: #0a1220;
+      border: 1px solid #1a2a4a;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.72rem;
+      color: #a0c4e0;
+      white-space: pre;
+      max-height: 220px;
+      overflow: auto;
+    }
+
+    .nested-json.open { display: block; }
+
     .truncate-notice {
       display: flex;
       align-items: center;
@@ -471,7 +608,7 @@
 <body>
   <header>
     <div class="header-left">
-      <h1>Claude Mongo Chat</h1>
+      <h1>Gemini Mongo Chat</h1>
       <div class="updated-at" id="updated-at"></div>
     </div>
     <div class="header-actions">
@@ -734,6 +871,189 @@
       }
     }
 
+    // ── 셀 포맷터 (columns[i].type 기반) ─────────────────────────────────────
+    function fmtOid(v) {
+      const s = typeof v === 'string' ? v : (v && v.$oid) || String(v);
+      const short = s.length > 8 ? s.slice(0, 8) : s;
+      return `<span class="cell-oid" title="${escapeHtml(s)}">${escapeHtml(short)}</span>`;
+    }
+
+    function fmtDate(v) {
+      let d;
+      if (v == null) return `<span class="cell-null">—</span>`;
+      if (typeof v === 'number') d = new Date(v);
+      else if (typeof v === 'string') d = new Date(v);
+      else if (v.$date) d = new Date(typeof v.$date === 'string' ? v.$date : Number(v.$date.$numberLong));
+      else return escapeHtml(String(v));
+      if (isNaN(d.getTime())) return escapeHtml(String(v));
+      const parts = new Intl.DateTimeFormat('ko-KR', {
+        timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      }).formatToParts(d);
+      const get = (t) => parts.find(p => p.type === t)?.value ?? '';
+      return `<span class="cell-mono">${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}</span>`;
+    }
+
+    // *Ts / *_ts / *_at 필드는 스키마 상 number 로 저장되지만 unix ms 타임스탬프이므로 date 로 렌더.
+    function isTimestampKey(key) {
+      if (!key) return false;
+      const leaf = key.includes('.') ? key.split('.').pop() : key;
+      return /(Ts|_ts|_at)$/i.test(leaf);
+    }
+
+    function looksLikeUnixMs(v) {
+      const n = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(n) && n >= 1e12 && n < 4e13;
+    }
+
+    function fmtDecimal(v) {
+      if (v == null) return `<span class="cell-null">—</span>`;
+      const raw = typeof v === 'object' && v.$numberDecimal ? v.$numberDecimal : String(v);
+      const num = Number(raw);
+      if (isNaN(num)) return escapeHtml(raw);
+      return `<span class="cell-mono">${num.toLocaleString('ko-KR')}</span>`;
+    }
+
+    function fmtBool(v) {
+      if (v === true) return `<span class="cell-bool-t">✓</span>`;
+      if (v === false) return `<span class="cell-bool-f">✗</span>`;
+      return `<span class="cell-null">—</span>`;
+    }
+
+    function fmtNested(v, kind) {
+      if (v == null) return `<span class="cell-null">—</span>`;
+      const label = kind === 'array'
+        ? `▶ ${Array.isArray(v) ? v.length : 0}개 항목`
+        : `▶ {...}`;
+      const json = JSON.stringify(v, null, 2);
+      const id = 'nj-' + Math.random().toString(36).slice(2, 9);
+      return `<button type="button" class="cell-nested" data-target="${id}">${label}</button>`
+        + `<div class="nested-json" id="${id}">${escapeHtml(json)}</div>`;
+    }
+
+    function renderCell(value, type, key) {
+      if (value === null || value === undefined) return `<span class="cell-null">—</span>`;
+      // 타임스탬프 힌트: schema type=number 지만 이름이 *Ts/*_at 이고 값이 unix ms 형태면 date
+      if (isTimestampKey(key) && looksLikeUnixMs(value)) return fmtDate(value);
+      const t = (type || 'unknown').toLowerCase();
+      if (t === 'objectid') return fmtOid(value);
+      if (t === 'date') return fmtDate(value);
+      if (t === 'decimal128') return fmtDecimal(value);
+      if (t === 'boolean') return fmtBool(value);
+      if (t === 'array' || Array.isArray(value)) return fmtNested(value, 'array');
+      if (t === 'object' || (typeof value === 'object')) return fmtNested(value, 'object');
+      if (t === 'number') return `<span class="cell-mono">${escapeHtml(String(value))}</span>`;
+      return escapeHtml(String(value));
+    }
+
+    function getNestedValue(obj, key) {
+      if (!key.includes('.')) return obj[key];
+      let cur = obj;
+      for (const p of key.split('.')) {
+        if (cur == null) return undefined;
+        cur = cur[p];
+      }
+      return cur;
+    }
+
+    function renderResultData(bubble, payload, requestId) {
+      const divider = document.createElement('hr');
+      divider.className = 'result-divider';
+      bubble.appendChild(divider);
+
+      const container = document.createElement('div');
+      container.className = 'result-data';
+
+      // 상단 배지
+      const badges = document.createElement('div');
+      badges.className = 'result-badges';
+      const countBadge = document.createElement('span');
+      countBadge.className = 'badge';
+      countBadge.textContent = `총 ${payload.count}건`;
+      badges.appendChild(countBadge);
+      if (typeof payload.dbTimeMs === 'number') {
+        const t = document.createElement('span');
+        t.className = 'badge';
+        t.textContent = `DB ${(payload.dbTimeMs / 1000).toFixed(2)}s`;
+        badges.appendChild(t);
+      }
+      if (payload.columnConfidence === 'partial') {
+        const p = document.createElement('span');
+        p.className = 'badge partial';
+        const n = (payload.unmappedKeys || []).length;
+        p.textContent = `일부 컬럼은 자동 매핑되지 않았습니다${n ? ` (${n}개)` : ''}`;
+        badges.appendChild(p);
+      }
+      container.appendChild(badges);
+
+      // 데이터 없음
+      if (!payload.data || payload.data.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-card';
+        empty.textContent = payload.message || '조회된 데이터가 없습니다.';
+        container.appendChild(empty);
+        bubble.appendChild(container);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+        return;
+      }
+
+      // 테이블
+      const wrap = document.createElement('div');
+      wrap.className = 'result-table-wrap';
+      const table = document.createElement('table');
+      table.className = 'result-table';
+
+      const thead = document.createElement('thead');
+      const trh = document.createElement('tr');
+      const cols = payload.columns || [];
+      for (const col of cols) {
+        const th = document.createElement('th');
+        if (col.source == null) th.classList.add('unmapped');
+        th.title = `${col.key} · ${col.type}${col.source ? ` · ${col.source}` : ''}`;
+        const label = document.createElement('span');
+        label.textContent = col.label || col.key;
+        const key = document.createElement('span');
+        key.className = 'th-key';
+        key.textContent = col.key;
+        th.appendChild(label);
+        th.appendChild(key);
+        trh.appendChild(th);
+      }
+      thead.appendChild(trh);
+      table.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+      for (const row of payload.data) {
+        const tr = document.createElement('tr');
+        for (const col of cols) {
+          const td = document.createElement('td');
+          const val = getNestedValue(row, col.key);
+          td.innerHTML = renderCell(val, col.type, col.key);
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      container.appendChild(wrap);
+
+      // nested JSON 토글
+      container.addEventListener('click', (e) => {
+        const btn = e.target.closest('.cell-nested');
+        if (!btn) return;
+        const el = container.querySelector(`#${btn.dataset.target}`);
+        if (el) el.classList.toggle('open');
+      });
+
+      bubble.appendChild(container);
+
+      // 복사·엑셀 버튼 — rows 를 그대로 복사(JSON)
+      const copyText = JSON.stringify(payload.data, null, 2);
+      addResultActions(bubble, copyText, requestId);
+
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
     function addResultActions(parentEl, text, requestId) {
       const actions = document.createElement('div');
       actions.className = 'result-actions';
@@ -831,6 +1151,7 @@
       chatWindow.scrollTop = chatWindow.scrollHeight;
 
       let currentStep = null;
+      let resultRendered = false;
 
       function nowHMS() {
         return new Date().toTimeString().slice(0, 8);
@@ -897,12 +1218,26 @@
                 addStep(event.message);
               } else if (event.type === 'log') {
                 addLog(event.message);
+              } else if (event.type === 'query') {
+                // 구조화된 query 이벤트 — 상세 로그는 이미 별도 'log' 이벤트로 표시됨 (backward compat).
+                // 여기서는 추가 렌더 없음. 필요 시 상단 배지 등 확장.
+              } else if (event.type === 'result-data') {
+                if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
+                assistantTime.textContent = nowHMS();
+                renderResultData(bubble, event.data, currentRequestId);
+                resultRendered = true;
               } else if (event.type === 'result') {
+                // result-data 로 이미 렌더했거나 LLM 이 아무 텍스트도 안 만들었으면 스킵.
+                const resultText = event.message ?? '';
+                if (resultRendered || !resultText.trim()) {
+                  if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
+                  assistantTime.textContent = nowHMS();
+                  continue;
+                }
                 if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
                 const d1 = document.createElement('hr'); d1.className = 'result-divider'; bubble.appendChild(d1);
                 const r1 = document.createElement('div'); r1.className = 'result-text'; bubble.appendChild(r1);
                 assistantTime.textContent = nowHMS();
-                const resultText = event.message;
                 const capturedRequestId = currentRequestId;
                 const truncated = resultText.length > 3000;
                 const displayText = truncated ? resultText.slice(0, 3000) + '\n...' : resultText;

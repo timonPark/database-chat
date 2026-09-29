@@ -20,9 +20,11 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
   exit 1
 fi
 
-# 2. MySQL 준비 대기
+# 2. MySQL 준비 대기 — TCP 준비까지 확인
+# `-h localhost` 는 socket 을 쓰므로 TCP 가 아직 준비 안 됐어도 통과 → 뒤 mysql 명령이 실패.
+# `-h 127.0.0.1` 로 명시해 실제 TCP 리스너가 열릴 때까지 기다린다.
 echo "⏳ MySQL 준비 대기 중..."
-until docker exec "$CONTAINER" mysqladmin ping -h localhost -uroot -pchangeme --silent 2>/dev/null; do
+until docker exec "$CONTAINER" mysqladmin ping -h 127.0.0.1 -uroot -pchangeme --silent 2>/dev/null; do
   sleep 2
 done
 echo "✔  MySQL 연결 확인"

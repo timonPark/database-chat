@@ -5,7 +5,8 @@ Windows 에서만 나타나는 플랫폼 특성과 그에 맞춰 코드에 반�
 관련 메모리·문서:
 - `windows-support-plan.md` — Windows 지원 전략 (Mac 템플릿은 유지, Windows 전용 템플릿 신설)
 - `claude-mongodb-wellcheck_windows_v2/TROUBLESHOOTING.md` — 실제 발생한 버그 사후 기록(로그)
-- `claude-mongodb-wellcheck_windows/` — Windows 실기 검증 완료 read-only 레퍼런스
+- `claude-mongodb-wellcheck_windows/` — 옛 아키텍처 (#144 이전) Windows 실기 검증본 (read-only)
+- `claude-mongodb-wellcheck_windows_v2/` — **새 아키텍처 (#144 이후, LLM 이 DB 결과 무접근) 기준 Windows 레퍼런스**. Mac 대응본은 `claude-mongodb-wellcheck/`
 
 이 문서와 TROUBLESHOOTING 의 차이:
 - 이 문서 = **스펙**: OS 특성 + 코드에서 지켜야 하는 규칙 (선행 지식)
@@ -14,6 +15,38 @@ Windows 에서만 나타나는 플랫폼 특성과 그에 맞춰 코드에 반�
 ---
 
 > **참고**: 이 문서 초안에는 "프로세스 인자 인코딩 (CP949)" 항목이 §1 으로 있었지만, #144 에서 아키텍처를 바꿔 **LLM 이 더 이상 curl 을 실행하지 않게 되어** 인코딩 문제가 근본에서 소멸했다. 서버가 LLM 텍스트 응답을 파싱해 직접 DB 를 조회하므로 curl 프로세스 경계 자체가 없어짐. 그래서 CP949 fallback 미들웨어 규칙은 폐기하고 아래 §1 부터 시작한다.
+
+## 0. Mac 템플릿 → Windows 템플릿 변환 델타 (요약)
+
+`claude-mongodb-wellcheck` (Mac, 새 아키텍처) 과 `claude-mongodb-wellcheck_windows_v2` (Windows, 새 아키텍처) 는 **아키텍처·프롬프트·이벤트 핸들러·내부 실행 함수·재쿼리 로직·UI·scripts 가 전부 동일**하다. 다른 것은 아래 6개 지점뿐. 다른 조합 (LLM · DB) 의 Windows 템플릿을 만들 때는 해당 Mac 템플릿 원본에 이 6개 델타만 그대로 얹으면 된다.
+
+| # | 항목 | Mac | Windows | 자세히 |
+|---|---|---|---|---|
+| 1 | 추가 import | — | `import os from 'os'` · `import { fileURLToPath } from 'url'` · `import crypto from 'crypto'` | §2 |
+| 2 | `__dirname` 파생 | `import.meta.dirname` 직접 사용 | `const __dirname = path.dirname(fileURLToPath(import.meta.url))` | §2 |
+| 3 | LLM CLI 실행 파일 해결 | `spawn('claude', ...)` 문자열 그대로 | `spawn(resolveClaudeBin(), ...)` — `.cmd` shim → `.exe` 절대경로 파싱 | §1 |
+| 4 | 시스템 프롬프트 전달 | `--system-prompt <inline text>` | 임시파일 write + `--system-prompt-file <path>` + close 시 cleanup | §2 |
+| 5 | spawn 옵션 | 기본 (shell: false 가 default) | `{ shell: false, ... }` 명시 (인자 이스케이프 문제 방지 주석과 함께) | §1 |
+| 6 | 포트 점유 해제 | \`\`\`ts\nexecSync('lsof -ti :3111')\n  .split('\\n')\n  .forEach(pid => process.kill(Number(pid), 'SIGKILL'))\n\`\`\` | \`\`\`ts\nexecSync('netstat -ano -p tcp')\n  .split('\\n')\n  .filter(l => l.includes('LISTENING') && l.match(RegExp))\n  .forEach(pid => execSync('taskkill /PID pid /F'))\n\`\`\` | §3 |
+
+**LLM CLI 별 참고 사항**:
+- `claude`: `resolveClaudeBin()` 이 `where claude.cmd` 로 셈 위치를 찾아 `%dp0%\...\claude.exe` 상대 경로를 파싱
+- `codex`: Windows 는 `codex.exe` 로 설치될 수 있음 (배포 방식 확인 필요), `--sandbox read-only` 는 그대로 유지
+- `agy` (Gemini): Windows 배포 여부 확인 후 동일 패턴 (shim → exe 해결)
+
+**절대 하지 말 것**:
+- Mac 템플릿 파일 안에 `if (process.platform === 'win32')` 분기를 넣지 말 것. 폴더/템플릿 단위로 분리 (부록 참조).
+- 위 6개 외의 로직 차이가 Windows 템플릿에서 발견되면, 그것은 Mac 이관이 누락됐거나 새로운 Windows 특성 발견을 의미. 확인 후 이 문서에 새 섹션 추가.
+
+### 검증 방법
+
+새 Windows 템플릿을 만든 뒤:
+```bash
+diff templates/<llm>-<db>/server.ts templates/<llm>-<db>-windows/server.ts
+```
+diff 결과가 위 표의 6개 지점에 국한되면 정상. 그 외 차이가 나오면 Mac 로직이 이관 안 됐거나 Windows 대응이 누락된 것.
+
+---
 
 ## 1. `.cmd`/`.bat` 실행 파일과 `spawn`
 

@@ -6,6 +6,9 @@ import type { Pool, RowDataPacket } from 'mysql2/promise';
 import type { Server } from 'http';
 import fs from 'fs';
 import path from 'path';
+import { loadAllSchemas } from './scripts/load-schema-index.js';
+import { analyzeSql } from './scripts/sql-analyze.js';
+import { buildColumnsFromSql } from './scripts/build-columns.js';
 
 // ── 환경 변수 ──────────────────────────────────────────────────────────────────
 
@@ -17,7 +20,6 @@ const DB_USER_NAME: string | undefined = process.env.DB_USER_NAME;
 const DB_USER_PASSWORD: string | undefined = process.env.DB_USER_PASSWORD;
 const TABLE_MAPPING_FILE: string = process.env.TABLE_MAPPING_FILE ?? './table-mapping.md';
 const CLAUDE_MODEL: string = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5-20251001';
-const CLAUDE_MAX_TURNS: string = process.env.CLAUDE_MAX_TURNS ?? '10';
 const TABLE_INDEX_FILE: string = './index.md';
 const TABLES_DIR: string = path.resolve(import.meta.dirname, 'tables');
 
@@ -59,11 +61,6 @@ interface DbQueryBody {
   limit?: number;
 }
 
-interface DbAggregateBody {
-  requestId?: string;
-  sql?: string;
-}
-
 interface DbExportBody {
   requestId: string;
 }
@@ -83,43 +80,31 @@ interface SqlStore {
   table: string;
 }
 
-type SseEventType = 'progress' | 'log' | 'result' | 'error' | 'cancelled';
-type SendFn = (type: SseEventType, msg: string) => void;
+type SseEventType = 'progress' | 'log' | 'query' | 'result-data' | 'result' | 'error' | 'cancelled';
+type SendFn = (type: SseEventType, msg: unknown) => void;
 
-interface ClaudeToolUseBlock {
-  type: 'tool_use';
-  name: string;
-  input?: { command?: string };
+interface QueryEventPayload {
+  endpoint: '/db-query';
+  requestBody: Record<string, unknown>;
 }
 
-interface ClaudeTextBlock {
-  type: 'text';
-  text?: string;
+interface ResultDataEventPayload {
+  count: number;
+  data: Record<string, unknown>[];
+  columns: unknown[];
+  columnConfidence: 'full' | 'partial';
+  unmappedKeys: string[];
+  dbTimeMs: number;
 }
 
+// Claude stream-json 이벤트 (도구 없어 tool_use/tool_result 는 발생 안 하지만 타입은 유지)
+interface ClaudeTextBlock { type: 'text'; text?: string; }
+interface ClaudeToolUseBlock { type: 'tool_use'; name: string; input?: { command?: string }; }
 type ClaudeContentBlock = ClaudeToolUseBlock | ClaudeTextBlock;
-
 interface ClaudeSystemEvent { type: 'system'; }
-interface ClaudeAssistantEvent {
-  type: 'assistant';
-  message?: { content?: ClaudeContentBlock[] };
-}
-interface ClaudeToolResultBlock {
-  type: 'tool_result';
-  content?: string | { type?: string; text?: string }[];
-}
-interface ClaudeUserEvent {
-  type: 'user';
-  message?: { content?: ClaudeToolResultBlock[] };
-}
-interface ClaudeResultEvent {
-  type: 'result';
-  subtype: string;
-  result?: string;
-  cost_usd?: number;
-}
-
-type ClaudeEvent = ClaudeSystemEvent | ClaudeAssistantEvent | ClaudeUserEvent | ClaudeResultEvent;
+interface ClaudeAssistantEvent { type: 'assistant'; message?: { content?: ClaudeContentBlock[] }; }
+interface ClaudeResultEvent { type: 'result'; subtype: string; result?: string; cost_usd?: number; }
+type ClaudeEvent = ClaudeSystemEvent | ClaudeAssistantEvent | ClaudeResultEvent;
 
 // ── 테이블 인덱스 로드 ─────────────────────────────────────────────────────────
 
@@ -137,6 +122,14 @@ try {
   } catch {
     console.warn(`테이블 매핑 파일도 읽을 수 없습니다: ${TABLE_MAPPING_FILE}`);
   }
+}
+
+const schemaLoadResult = loadAllSchemas(TABLES_DIR);
+if (schemaLoadResult.total === 0) {
+  console.warn(`테이블 스키마 디렉토리가 비어있거나 없습니다: ${TABLES_DIR} (fallback: 원본 key 노출)`);
+} else {
+  const failedSuffix = schemaLoadResult.failed > 0 ? ` (실패 ${schemaLoadResult.failed}건)` : '';
+  console.log(`테이블 스키마 인덱스 로드 완료: ${schemaLoadResult.loaded}/${schemaLoadResult.total}${failedSuffix}`);
 }
 
 function loadTableIndex(): string {
@@ -172,8 +165,17 @@ function buildTableGuide(): string {
   }
 }
 
-function buildSystemPrompt(requestId: string, limit: number = 20): string {
-  return `MySQL 조회 어시스턴트. 설명 없이 즉시 curl로 쿼리 실행 후 결과를 한국어로 답한다.
+function buildSystemPrompt(limit: number = 20): string {
+  return `MySQL 조회 쿼리 생성기. 사용자 자연어 요청 → **정확히 하나의 JSON 객체** 만 출력하고 종료.
+
+**절대 규칙**:
+- 응답은 오직 하나의 JSON 객체. 앞뒤에 설명·인사·마크다운 코드펜스·요약 어떤 것도 붙이지 마라
+- 도구 · 명령 실행 없음. curl · bash · cat 등 사용 금지 (도구가 제공되지 않음)
+- 서버가 이 JSON 을 파싱해 DB 를 조회하고 결과를 UI 에 직접 그린다. 너는 결과를 볼 수 없고, 결과를 안내할 필요도 없다
+
+**출력 형식** (하나만):
+
+{"kind":"sql","sql":"SELECT ... FROM ... WHERE ... ORDER BY ... LIMIT ${limit}"}
 
 [테이블]
 ${buildTableSummary()}
@@ -181,21 +183,12 @@ ${buildTableSummary()}
 [테이블 선택 가이드: 테이블명 | 자연어 키워드 | 주요 컬럼 | 설명]
 ${buildTableGuide()}
 
-[스키마 확인] 컬럼명 불확실 시: cat "${TABLES_DIR}/<테이블명>.md"
-
-[단순 조회] curl -sX POST http://localhost:${PORT}/db-query -H 'Content-Type: application/json' -d '{"requestId":"${requestId}","sql":"SELECT col1, col2 FROM table WHERE ... ORDER BY ... LIMIT ${limit}"}'
-
-[집계/조인] curl -sX POST http://localhost:${PORT}/db-aggregate -H 'Content-Type: application/json' -d '{"requestId":"${requestId}","sql":"SELECT t1.col, COUNT(*) FROM t1 JOIN t2 ON t1.id = t2.t1_id WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT ${limit}"}'
-
 규칙:
-- password·pass_hash 컬럼은 반드시 SELECT에서 제외
-- SELECT문만 허용 (INSERT·UPDATE·DELETE·DROP·ALTER·CREATE·TRUNCATE 금지)
-- EXPLAIN SELECT ... 로 실행 계획 확인 가능 (type=ALL 발견 시 인덱스 추가 안내)
-- 단순 WHERE·ORDER BY는 /db-query, JOIN·GROUP BY·서브쿼리·HAVING은 /db-aggregate
-- LIMIT은 반드시 ${limit} 사용. 엑셀 내보내기는 동일 쿼리를 그대로 실행함
-- 숫자로도 문자열로도 저장 가능한 값(전화번호·사번·주민등록번호 등)은 우선 값 그대로 조회한 뒤 결과가 0건이면 타입을 반대로 바꿔 한 번 더 재시도한다. 예) WHERE phone = '01012345678' 로 0건이면 WHERE phone = 01012345678 (또는 CAST(phone AS UNSIGNED) = 01012345678) 로 재조회. 재조회에서도 0건이면 "조회된 데이터가 없습니다"
-- 결과 없으면 즉시 "조회된 데이터가 없습니다"
-- 오류 시 원인 설명 후 쿼리 수정하여 재시도`;
+- password · pass_hash · passwd · pwd · secret 컬럼은 반드시 SELECT 에서 제외
+- SELECT · EXPLAIN · SHOW · DESCRIBE · DESC 만 허용 (INSERT · UPDATE · DELETE · DROP · ALTER · CREATE · TRUNCATE · REPLACE · MERGE · EXEC · EXECUTE · CALL · GRANT · REVOKE · LOAD DATA · INTO OUTFILE · INTO DUMPFILE 절대 금지)
+- LIMIT 은 반드시 ${limit} 로 명시 (누락 시 서버가 강제 부착). 엑셀 내보내기는 저장된 SQL 을 그대로 재실행함
+- JOIN 시 alias 는 짧게 (t1, t2 등). SELECT 컬럼 라벨링은 서버가 처리
+- 단순 WHERE·ORDER BY 든 JOIN·GROUP BY·서브쿼리·HAVING 이든 동일하게 kind:"sql" 하나로 처리`;
 }
 
 // ── SQL 보안 검증 ─────────────────────────────────────────────────────────────
@@ -207,17 +200,15 @@ const SENSITIVE_COLUMNS: string[] = ['password', 'pass_hash', 'passwd', 'pwd', '
 function validateSql(sql: string): void {
   const trimmed: string = sql.trim().toUpperCase();
   const isAllowed: boolean = ALLOWED_SQL_PREFIXES.some(prefix => trimmed.startsWith(prefix));
-  if (!isAllowed) throw new Error('SELECT 쿼리만 허용됩니다.');
+  if (!isAllowed) throw new Error('SELECT · EXPLAIN · SHOW · DESCRIBE · DESC 쿼리만 허용됩니다.');
   if (BLOCKED_SQL_KEYWORDS.test(sql)) throw new Error('허용되지 않는 SQL 키워드가 포함되어 있습니다.');
 }
 
-function removeLimitFromSql(sql: string): string {
-  return sql.replace(/\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?/gi, '').trim();
-}
-
-function extractTableName(sql: string): string {
-  const match: RegExpMatchArray | null = sql.match(/FROM\s+`?(\w+)`?/i);
-  return match?.[1] ?? 'result';
+function ensureLimit(sql: string, limit: number): string {
+  const upper: string = sql.trim().toUpperCase();
+  if (!upper.startsWith('SELECT')) return sql; // EXPLAIN/SHOW/DESC 등은 LIMIT 강제 안 함
+  if (upper.includes('LIMIT')) return sql;
+  return `${sql} LIMIT ${limit}`;
 }
 
 // ── 유틸 ──────────────────────────────────────────────────────────────────────
@@ -231,11 +222,105 @@ function isTimeoutError(err: unknown): boolean {
   return e.code === 'PROTOCOL_SEQUENCE_TIMEOUT' || (e.message ?? '').includes('Timeout');
 }
 
+// ── 내부 실행 함수 (HTTP 라우트 및 /chat 이 공유) ───────────────────────────
+// LLM 은 결과에 접근할 수 없으므로 결과 스트림 분리 로직 (splitForChatContext 등) 은 없음.
+
+interface SqlResultBody {
+  count: number;
+  data: Record<string, unknown>[];
+  dbTimeMs: number;
+  columns: unknown[];
+  columnConfidence: 'full' | 'partial';
+  unmappedKeys: string[];
+  message?: string;
+}
+
+async function executeSqlInternal(rawSql: string, limit: number): Promise<{ body: SqlResultBody; effectiveSql: string; table: string }> {
+  validateSql(rawSql);
+  const effectiveSql: string = ensureLimit(rawSql, limit);
+  const analysis = analyzeSql(effectiveSql);
+  const table: string = analysis.baseTable ?? 'result';
+
+  const dbStart: number = Date.now();
+  const [rows] = await pool.query<RowDataPacket[]>({ sql: effectiveSql, timeout: DB_TIMEOUT_MS });
+  const dbTimeMs: number = Date.now() - dbStart;
+
+  // 민감 컬럼 제거 (SELECT * 등으로 딸려온 경우 대응)
+  const data: Record<string, unknown>[] = rows.map((row: RowDataPacket) => {
+    const r: Record<string, unknown> = { ...row };
+    for (const col of SENSITIVE_COLUMNS) delete r[col];
+    return r;
+  });
+
+  const cols = buildColumnsFromSql(data, analysis);
+
+  if (data.length === 0) {
+    return {
+      body: {
+        count: 0,
+        data: [],
+        dbTimeMs,
+        message: '조회된 데이터가 없습니다.',
+        ...cols,
+      },
+      effectiveSql,
+      table,
+    };
+  }
+
+  return {
+    body: { count: data.length, data, dbTimeMs, ...cols },
+    effectiveSql,
+    table,
+  };
+}
+
+// LLM 이 뱉는 최종 텍스트에서 JSON 추출.
+function extractJsonFromText(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const stripped = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  const start = stripped.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < stripped.length; i += 1) {
+    const c = stripped[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\') { escape = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === '{') depth += 1;
+    else if (c === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        const jsonText = stripped.slice(start, i + 1);
+        try { return JSON.parse(jsonText); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+interface LlmSqlPayload {
+  kind: 'sql';
+  sql?: string;
+  limit?: number;
+}
+
+function isLlmSqlPayload(v: unknown): v is LlmSqlPayload {
+  if (v === null || typeof v !== 'object') return false;
+  const kind = (v as { kind?: unknown }).kind;
+  return kind === 'sql';
+}
+
 // ── Claude 이벤트 핸들러 ──────────────────────────────────────────────────────
+// LLM 은 도구가 없으므로 tool_use · tool_result 이벤트는 발생하지 않음.
+// 실제 JSON 파싱과 실행은 /chat 이 result 이벤트의 result 필드 (최종 text) 로 처리.
 
 function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
   let systemSeen: boolean = false;
-  let lastEventType: string = '';
 
   return function handleClaudeEvent(event: ClaudeEvent): void {
     switch (event.type) {
@@ -243,89 +328,25 @@ function createClaudeEventHandler(send: SendFn): (event: ClaudeEvent) => void {
         if (!systemSeen) {
           systemSeen = true;
           console.log(`${ts()} [준비]      Claude 세션 시작`);
-          send('progress', '준비 중...');
+          send('progress', '쿼리 생성 준비 중...');
         }
         break;
 
       case 'assistant': {
         const contents: ClaudeContentBlock[] = event.message?.content ?? [];
-        const hasToolUse: boolean = contents.some(b => b.type === 'tool_use');
         const hasText: boolean = contents.some(b => b.type === 'text');
-
-        if (hasToolUse) {
-          for (const block of contents) {
-            if (block.type !== 'tool_use' || block.name !== 'Bash') continue;
-            const cmd: string = block.input?.command?.trim() ?? '';
-            if (cmd.includes('/db-query') || cmd.includes('/db-aggregate')) {
-              const isAgg: boolean = cmd.includes('/db-aggregate');
-              console.log(`${ts()} [조회 시작]  DB ${isAgg ? '집계' : '쿼리'} 실행 중...`);
-              console.log(`             $ ${cmd}`);
-              send('progress', `조회 시작 — DB ${isAgg ? '집계' : '쿼리'} 실행 중...`);
-              const singleMatch: RegExpMatchArray | null = cmd.match(/-d\s+'([^']+)'/);
-              const doubleMatch: RegExpMatchArray | null = cmd.match(/-d\s+"((?:[^"\\]|\\.)*)"/);
-              const rawData: string | undefined = singleMatch?.[1] ?? doubleMatch?.[1]?.replace(/\\"/g, '"');
-              if (rawData) {
-                try {
-                  const parsed = JSON.parse(rawData) as { sql?: string };
-                  const snippet: string = parsed.sql ?? JSON.stringify(parsed, null, 2);
-                  send('log', snippet.length > 400 ? snippet.slice(0, 400) + '\n...(생략)' : snippet);
-                } catch {
-                  send('log', rawData.slice(0, 200));
-                }
-              }
-            } else if (cmd.startsWith('cat') && !cmd.includes('|')) {
-              const file: string | undefined = cmd.replace('cat', '').trim().split('/').pop();
-              console.log(`${ts()} [스키마 확인]  ${file} 읽는 중...`);
-              send('progress', `스키마 확인 — ${file} 읽는 중...`);
-              send('log', `$ cat ${file}`);
-            } else {
-              console.log(`${ts()} [실행]      $ ${cmd.slice(0, 80)}`);
-              send('progress', '실행 중...');
-              send('log', `$ ${cmd.length > 120 ? cmd.slice(0, 120) + '...' : cmd}`);
-            }
-          }
-        } else if (hasText && lastEventType === 'user') {
-          console.log(`${ts()} [응답 생성]  응답값 생성 중...`);
-          send('progress', '응답값 생성 중...');
-        }
-        break;
-      }
-
-      case 'user': {
-        const blocks: ClaudeToolResultBlock[] = event.message?.content ?? [];
-        for (const block of blocks) {
-          if (block.type !== 'tool_result') continue;
-          const raw: string = typeof block.content === 'string'
-            ? block.content
-            : Array.isArray(block.content)
-              ? block.content.map(c => c.text ?? '').join('')
-              : '';
-          const text: string = raw.trim();
-          if (!text) break;
-          try {
-            const parsed = JSON.parse(text) as { count?: number; dbTimeMs?: number; error?: string };
-            if (typeof parsed.count === 'number') {
-              const dbSec: string = parsed.dbTimeMs != null ? ` / DB실행: ${(parsed.dbTimeMs / 1000).toFixed(2)}초` : '';
-              console.log(`${ts()} [DB 응답 확인] ${parsed.count}건 수신${dbSec}`);
-              send('progress', `DB 응답 확인 — ${parsed.count}건 수신${dbSec}`);
-            } else if (typeof parsed.error === 'string') {
-              console.log(`${ts()} [DB 오류] ${parsed.error}`);
-              send('progress', `DB 오류 — ${parsed.error}`);
-            }
-          } catch { /* 무시 */ }
-        }
+        if (hasText) send('progress', '쿼리 생성 중...');
         break;
       }
 
       case 'result':
         if (event.subtype === 'success') {
-          console.log(`${ts()} [응답 완료]  cost=$${event.cost_usd?.toFixed(4) ?? '?'}`);
+          console.log(`${ts()} [LLM 응답 완료] cost=$${event.cost_usd?.toFixed(4) ?? '?'}`);
         } else {
-          console.log(`${ts()} [실패]      subtype=${event.subtype}`);
+          console.log(`${ts()} [LLM 실패]  subtype=${event.subtype}`);
         }
         break;
     }
-    lastEventType = event.type;
   };
 }
 
@@ -363,86 +384,21 @@ app.get('/meta/erd', (_req: Request, res: Response) => {
 
 app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Response) => {
   const { requestId, sql, limit = 20 } = req.body;
-
   if (!sql?.trim()) return res.status(400).json({ error: 'sql 필드가 필요합니다.' });
 
   try {
-    validateSql(sql);
-  } catch (err) {
-    return res.status(400).json({ error: (err as Error).message });
-  }
-
-  const upperSql: string = sql.trim().toUpperCase();
-  const finalSql: string = upperSql.startsWith('SELECT') && !upperSql.includes('LIMIT')
-    ? `${sql} LIMIT ${limit}`
-    : sql;
-
-  const tableName: string = extractTableName(sql);
-  if (requestId) sqlStore.set(requestId, { sql: finalSql, table: tableName });
-  sqlStore.set('__latest__', { sql: finalSql, table: tableName });
-
-  try {
-    const dbStart: number = Date.now();
-    const [rows] = await pool.query<RowDataPacket[]>({ sql: finalSql, timeout: DB_TIMEOUT_MS });
-    const dbTimeMs: number = Date.now() - dbStart;
-
-    const data = rows.map(row => {
-      const r: Record<string, unknown> = { ...row };
-      SENSITIVE_COLUMNS.forEach(col => delete r[col]);
-      return r;
-    });
-
-    if (data.length === 0) {
-      return res.json({ count: 0, data: [], dbTimeMs, message: '조회된 데이터가 없습니다. 추가 쿼리 없이 즉시 이 메시지를 사용자에게 전달하라.' });
-    }
-    return res.json({ count: data.length, data, dbTimeMs });
+    const { body, effectiveSql, table } = await executeSqlInternal(sql, limit);
+    if (requestId) sqlStore.set(requestId, { sql: effectiveSql, table });
+    sqlStore.set('__latest__', { sql: effectiveSql, table });
+    return res.json(body);
   } catch (err) {
     if (isTimeoutError(err)) {
       console.warn(`${ts()} [타임아웃] ${DB_TIMEOUT_MSG}`);
       return res.status(504).json({ error: DB_TIMEOUT_MSG });
     }
-    console.error(`[DB 오류] ${(err as Error).message}`);
-    return res.status(500).json({ error: (err as Error).message });
-  }
-});
-
-app.post('/db-aggregate', async (req: Request<object, object, DbAggregateBody>, res: Response) => {
-  const { requestId, sql } = req.body;
-
-  if (!sql?.trim()) return res.status(400).json({ error: 'sql 필드가 필요합니다.' });
-
-  try {
-    validateSql(sql);
-  } catch (err) {
-    return res.status(400).json({ error: (err as Error).message });
-  }
-
-  const tableName: string = extractTableName(sql);
-  if (requestId) sqlStore.set(requestId, { sql, table: tableName });
-  sqlStore.set('__latest__', { sql, table: tableName });
-
-  try {
-    const dbStart: number = Date.now();
-    const [rows] = await pool.query<RowDataPacket[]>({ sql, timeout: DB_TIMEOUT_MS });
-    const dbTimeMs: number = Date.now() - dbStart;
-
-    const data = rows.map(row => {
-      const r: Record<string, unknown> = { ...row };
-      SENSITIVE_COLUMNS.forEach(col => delete r[col]);
-      return r;
-    });
-
-    if (data.length === 0) {
-      return res.json({ count: 0, data: [], dbTimeMs, message: '조회된 데이터가 없습니다. 추가 쿼리 없이 즉시 이 메시지를 사용자에게 전달하라.' });
-    }
-    return res.json({ count: data.length, data, dbTimeMs });
-  } catch (err) {
-    if (isTimeoutError(err)) {
-      console.warn(`${ts()} [타임아웃] ${DB_TIMEOUT_MSG}`);
-      return res.status(504).json({ error: DB_TIMEOUT_MSG });
-    }
-    console.error(`[DB 집계 오류] ${(err as Error).message}`);
-    return res.status(500).json({ error: (err as Error).message });
+    const msg: string = (err as Error).message;
+    console.error(`[DB 오류] ${msg}`);
+    return res.status(msg.includes('허용') ? 400 : 500).json({ error: msg });
   }
 });
 
@@ -453,9 +409,9 @@ app.post('/db-export', async (req: Request<object, object, DbExportBody>, res: R
 
   try {
     const [rows] = await pool.query<RowDataPacket[]>({ sql: stored.sql, timeout: DB_TIMEOUT_MS });
-    const data = rows.map(row => {
+    const data: Record<string, unknown>[] = rows.map((row: RowDataPacket) => {
       const r: Record<string, unknown> = { ...row };
-      SENSITIVE_COLUMNS.forEach(col => delete r[col]);
+      for (const col of SENSITIVE_COLUMNS) delete r[col];
       return r;
     });
     console.log(`${ts()} [엑셀 내보내기] ${stored.table} ${data.length}건`);
@@ -488,8 +444,11 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
-  const send: SendFn = (type, msg) => {
-    res.write(`data: ${JSON.stringify({ type, message: msg })}\n\n`);
+  const send: SendFn = (type: SseEventType, msg: unknown): void => {
+    const payload = typeof msg === 'string'
+      ? { type, message: msg }
+      : { type, data: msg };
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
 
   console.log(`\n${'─'.repeat(60)}`);
@@ -500,11 +459,13 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
     'claude',
     [
       '-p', message.trim(),
-      '--allowedTools', 'Bash',
-      '--system-prompt', buildSystemPrompt(requestId ?? '', limit),
+      // 도구 전면 차단 — allowlist 에 존재하지 않는 이름만 넣어 실질적으로 어떤 도구도 허용하지 않는다.
+      // 목적: LLM 이 DB 응답/스키마/파일/네트워크 어떤 채널로도 결과를 볼 수 없게 한다.
+      '--allowedTools', '__none__',
+      '--system-prompt', buildSystemPrompt(limit),
       '--output-format', 'stream-json',
       '--verbose',
-      '--max-turns', CLAUDE_MAX_TURNS,
+      '--max-turns', '1',
       '--model', CLAUDE_MODEL,
     ],
     { stdio: ['ignore', 'pipe', 'pipe'], env: CLAUDE_CHILD_ENV },
@@ -527,25 +488,74 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
         const event: ClaudeEvent = JSON.parse(line) as ClaudeEvent;
         handleClaudeEvent(event);
         if (event.type === 'result' && event.subtype === 'success') finalResult = event.result ?? '';
-      } catch { /* 무시 */ }
+      } catch { /* 파싱 불가 라인 무시 */ }
     }
   });
 
   child.stderr!.on('data', (data: Buffer) => { stderr += data.toString(); });
 
-  child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+  child.on('close', async (code: number | null, signal: NodeJS.Signals | null) => {
     if (requestId) activeJobs.delete(requestId);
+
     if (signal === 'SIGKILL' || signal === 'SIGTERM') {
       send('cancelled', '조회가 중지되었습니다.');
-    } else if (code !== 0 && !finalResult) {
-      console.error('[오류] Claude 프로세스 실패 (exit code:', code, ')');
-      send('error', 'Claude 프로세스 실행 실패: ' + stderr.slice(0, 200));
-    } else {
-      send('result', finalResult.trim());
+      res.write('data: [DONE]\n\n');
+      res.end();
+      console.log(`${'─'.repeat(60)}\n`);
+      return;
     }
-    console.log(`${'─'.repeat(60)}\n`);
+
+    if (code !== 0 && !finalResult) {
+      console.error('[오류] Claude 프로세스 실패 (exit code:', code, ')');
+      console.error(stderr);
+      send('error', 'Claude 프로세스 실행 실패: ' + stderr.slice(0, 200));
+      res.write('data: [DONE]\n\n');
+      res.end();
+      console.log(`${'─'.repeat(60)}\n`);
+      return;
+    }
+
+    // LLM 이 뱉은 텍스트에서 JSON 추출 → 서버가 직접 실행 → SSE 로 브라우저에 결과 전송.
+    const parsed = extractJsonFromText(finalResult);
+    if (!isLlmSqlPayload(parsed)) {
+      console.error(`[오류] LLM 출력에서 유효한 kind:"sql" JSON 을 찾지 못함. 원문 앞머리: ${finalResult.slice(0, 200)}`);
+      send('error', 'LLM 이 쿼리 JSON 을 만들지 못했습니다. 다시 시도해 주세요.');
+      res.write('data: [DONE]\n\n');
+      res.end();
+      console.log(`${'─'.repeat(60)}\n`);
+      return;
+    }
+    if (!parsed.sql?.trim()) {
+      send('error', 'LLM 이 sql 필드를 비워서 반환했습니다. 다시 시도해 주세요.');
+      res.write('data: [DONE]\n\n');
+      res.end();
+      console.log(`${'─'.repeat(60)}\n`);
+      return;
+    }
+
+    // 구조화된 query 이벤트 (UI 로그·에디터에서 활용)
+    send('query', { endpoint: '/db-query', requestBody: parsed as unknown as Record<string, unknown> } satisfies QueryEventPayload);
+    send('log', JSON.stringify(parsed));
+    send('progress', '조회 시작 — SQL 실행 중...');
+    console.log(`${ts()} [조회 시작]  /db-query`);
+    console.log(`             ${JSON.stringify(parsed)}`);
+
+    try {
+      const { body, effectiveSql, table } = await executeSqlInternal(parsed.sql, parsed.limit ?? limit);
+      if (requestId) sqlStore.set(requestId, { sql: effectiveSql, table });
+      sqlStore.set('__latest__', { sql: effectiveSql, table });
+      send('result-data', body as unknown as ResultDataEventPayload);
+      send('progress', `DB 응답 완료 — ${body.count}건 / ${(body.dbTimeMs / 1000).toFixed(2)}초`);
+      send('result', '');
+    } catch (err) {
+      const msg: string = isTimeoutError(err) ? DB_TIMEOUT_MSG : (err as Error).message;
+      console.error(`[DB 오류] ${msg}`);
+      send('error', `DB 오류 — ${msg}`);
+    }
+
     res.write('data: [DONE]\n\n');
     res.end();
+    console.log(`${'─'.repeat(60)}\n`);
   });
 
   child.on('error', (err: NodeJS.ErrnoException) => {
@@ -569,7 +579,7 @@ function killPort(port: string): void {
 }
 
 pool.getConnection()
-  .then(conn => {
+  .then((conn) => {
     conn.release();
     console.log(`MySQL 연결 완료: ${DB_HOST}:${DB_PORT}/${DB_DATABASE}`);
     const server: Server = app.listen(Number(PORT), (): void => {

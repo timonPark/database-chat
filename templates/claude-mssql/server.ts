@@ -239,7 +239,6 @@ async function executeSqlInternal(rawSql: string): Promise<{ body: SqlResultBody
 
   const dbStart: number = Date.now();
   const request = pool.request();
-  request.timeout = DB_TIMEOUT_MS;
   const result = await request.query(effectiveSql);
   const dbTimeMs: number = Date.now() - dbStart;
 
@@ -400,7 +399,6 @@ app.post('/db-export', async (req: Request<object, object, DbExportBody>, res: R
 
   try {
     const request = pool.request();
-    request.timeout = DB_TIMEOUT_MS;
     const result = await request.query(stored.sql);
     const rawData: Record<string, unknown>[] = (result.recordset ?? []) as Record<string, unknown>[];
     const data: Record<string, unknown>[] = removeSensitiveColumns(rawData);

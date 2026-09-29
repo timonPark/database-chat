@@ -20,9 +20,11 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
   exit 1
 fi
 
-# 2. MySQL 준비 대기
+# 2. MySQL 준비 대기 — TCP 준비까지 확인
+# `-h localhost` 는 socket 을 쓰므로 TCP 가 아직 준비 안 됐어도 통과 → 뒤 mysql 명령이 실패.
+# `-h 127.0.0.1` 로 명시해 실제 TCP 리스너가 열릴 때까지 기다린다.
 echo "⏳ MySQL 준비 대기 중..."
-until docker exec "$CONTAINER" mysqladmin ping -h localhost -uroot -pchangeme --silent 2>/dev/null; do
+until docker exec "$CONTAINER" mysqladmin ping -h 127.0.0.1 -uroot -pchangeme --silent 2>/dev/null; do
   sleep 2
 done
 echo "✔  MySQL 연결 확인"
@@ -42,16 +44,16 @@ docker cp "${DIR_TMP}/sakila-data.sql"   "${CONTAINER}:/tmp/sakila-data.sql"
 # 5. 스키마 + 데이터 적용
 echo "🔄 스키마 적용 중..."
 docker exec "$CONTAINER" \
-  bash -c "mysql -uroot -pchangeme < /tmp/sakila-schema.sql"
+  bash -c "mysql -h 127.0.0.1 -uroot -pchangeme < /tmp/sakila-schema.sql"
 
 echo "🔄 데이터 적용 중... (시간이 걸릴 수 있습니다)"
 docker exec "$CONTAINER" \
-  bash -c "mysql -uroot -pchangeme < /tmp/sakila-data.sql"
+  bash -c "mysql -h 127.0.0.1 -uroot -pchangeme < /tmp/sakila-data.sql"
 
 # 6. 랜덤 비밀번호 생성 + dbuser 계정 생성 (읽기 전용)
 DB_USER_PASS=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 20)
 echo "🔐 dbuser 계정 생성 및 읽기 권한 부여 중..."
-docker exec "$CONTAINER" bash -c "mysql -uroot -pchangeme -e \
+docker exec "$CONTAINER" bash -c "mysql -h 127.0.0.1 -uroot -pchangeme -e \
   \"DROP USER IF EXISTS 'dbuser'@'%'; \
     CREATE USER 'dbuser'@'%' IDENTIFIED BY '${DB_USER_PASS}'; \
     GRANT SELECT ON sakila.* TO 'dbuser'@'%'; \
@@ -83,7 +85,7 @@ echo ""
 echo "✔  마이그레이션 완료!"
 echo "   데이터베이스: sakila"
 docker exec "$CONTAINER" \
-  bash -c "mysql -uroot -pchangeme sakila -e 'SHOW TABLES;'" 2>/dev/null \
+  bash -c "mysql -h 127.0.0.1 -uroot -pchangeme sakila -e 'SHOW TABLES;'" 2>/dev/null \
   | awk 'NR>1 { print "  •  " $1 }'
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

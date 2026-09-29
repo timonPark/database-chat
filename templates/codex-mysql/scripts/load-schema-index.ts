@@ -21,11 +21,37 @@ interface CacheEntry {
   schema: TableSchema | null;
 }
 
-// SQL tables/<name>.md 라인 포맷: | `col_name` | type | NO/YES | PRI/MUL | 한글 설명 |
-// 5-column (mongodb 는 3-column). Null · Key 는 스킵.
-const FIELD_ROW_REGEX = /^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*[^|]+\|\s*[^|]*\|\s*([^|]+?)\s*\|/;
+// SQL tables/<name>.md 라인 포맷 (LLM 에 따라 3-column · 5-column 등 다양):
+// 3-column: | `col` | type | 설명 |
+// 5-column: | `col` | type | Null | Key | 설명 |
+// 파싱 전략: split 으로 셀 분리 → 첫 셀 (name), 둘째 셀 (type), 마지막 셀 (description) 사용.
+// 중간 셀 수는 무관하게 처리 (LLM 이 어떤 포맷을 뽑아도 대응).
 const FIELD_SECTION_HEADING = /^##\s+컬럼\s*목록/;
 const NEXT_SECTION_HEADING = /^##\s+/;
+const NAME_CELL_REGEX = /^`([^`]+)`$/;
+const SEPARATOR_ROW_REGEX = /^\|[\s\-:|]+\|\s*$/;
+
+function parseFieldRow(line: string): FieldSchema | null {
+  // 표 행: |val1|val2|...|
+  if (!line.startsWith('|') || !line.trimEnd().endsWith('|')) return null;
+  if (SEPARATOR_ROW_REGEX.test(line)) return null; // | --- | --- | 같은 구분자 행 스킵
+  const cells = line.split('|').slice(1, -1).map((c) => c.trim());
+  // 최소: name · type · description = 3 개 셀
+  if (cells.length < 3) return null;
+
+  const nameCell = cells[0];
+  const typeCell = cells[1];
+  const descCell = cells[cells.length - 1];
+
+  const nameMatch = nameCell.match(NAME_CELL_REGEX);
+  if (!nameMatch) return null; // 헤더 행 (| 컬럼명 | 타입 | 설명 |) 은 백틱 없어서 여기서 걸러짐
+
+  return {
+    key: nameMatch[1].trim(),
+    type: typeCell,
+    label: descCell,
+  };
+}
 
 function parseSchemaFile(filePath: string, tableName: string): TableSchema | null {
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -40,10 +66,8 @@ function parseSchemaFile(filePath: string, tableName: string): TableSchema | nul
       continue;
     }
     if (NEXT_SECTION_HEADING.test(line)) break;
-    const match = line.match(FIELD_ROW_REGEX);
-    if (!match) continue;
-    const [, key, type, label] = match;
-    fields.push({ key: key.trim(), type: type.trim(), label: label.trim() });
+    const field = parseFieldRow(line);
+    if (field) fields.push(field);
   }
 
   if (fields.length === 0) return null;

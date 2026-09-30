@@ -7,7 +7,9 @@
   "scripts": {
     "start": "tsx server.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint server.ts"
+    "lint": "eslint server.ts",
+    "schema": "tsx scripts/generate-schema.ts",
+    "erd": "npx --no-install tsx scripts/generate-erd.ts"
   },
   "dependencies": {
     "dotenv": "^16.0.0",

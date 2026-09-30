@@ -837,7 +837,8 @@ function resolveClaudeBin(): string {
   try {
     const shimPath = execSync('where claude.cmd', { encoding: 'utf8' }).trim().split('\n')[0].trim();
     const content = fs.readFileSync(shimPath, 'utf-8');
-    const match = content.match(/%~dp0\\([^\s"]+claude\.exe)/i);
+    // npm 버전에 따라 shim 이 "%~dp0\..." 또는 "%dp0%\..." 형태
+    const match = content.match(/%~?dp0%?\\([^\s"]+claude\.exe)/i);
     if (match) {
       const resolved = path.resolve(path.dirname(shimPath), match[1]);
       if (fs.existsSync(resolved)) return resolved;

@@ -401,17 +401,38 @@ if [ -z "\$CODEX_BIN" ]; then
 fi
 `;
 
-  // ── #87: AI 모델 선택 — provider CLI 로 런타임 조회 + fallback ─────────────
-  // gemini 만 agy models 조회를 시도. claude/codex 는 default + 직접 입력.
-  const modelQuery = provider === 'gemini'
-    ? `echo "  (agy models 로 지원 모델 조회 중...)"
+  // ── #87 · #95: AI 모델 선택 — provider CLI 로 런타임 조회 + fallback ────
+  // gemini: `agy models` 서브커맨드 파싱.
+  // codex: 별도 list-models 서브커맨드 없음. ~/.codex/models_cache.json (codex CLI 가 자체 유지) 에서 slug 추출.
+  // claude: 안정적인 list-models 경로 없음 → default + 직접 입력.
+  let modelQuery: string;
+  if (provider === 'gemini') {
+    modelQuery = `echo "  (agy models 로 지원 모델 조회 중...)"
 while IFS= read -r _line; do
   _model=\$(echo "\$_line" | awk '{print \$1}' | tr -d ' \\t\\r')
   case "\$_model" in
     gemini-*) _MODELS+=("\$_model") ;;
   esac
-done < <("\$AGY_BIN" models 2>/dev/null || true)`
-    : `# ${provider === 'claude' ? 'Claude' : 'Codex'} CLI 는 안정적인 list-models 명령을 제공하지 않아 조회 없이 default + 직접 입력만 노출.`;
+done < <("\$AGY_BIN" models 2>/dev/null || true)`;
+  } else if (provider === 'codex') {
+    modelQuery = `_CODEX_CACHE="\$HOME/.codex/models_cache.json"
+if [ -r "\$_CODEX_CACHE" ] && command -v python3 >/dev/null 2>&1; then
+  echo "  (~/.codex/models_cache.json 에서 지원 모델 조회 중...)"
+  while IFS= read -r _model; do
+    [ -n "\$_model" ] && _MODELS+=("\$_model")
+  done < <(python3 -c "
+import json, sys
+try:
+    with open('\$_CODEX_CACHE') as f: data = json.load(f)
+    for m in data.get('models', []):
+        slug = m.get('slug')
+        if slug: print(slug)
+except Exception: pass
+" 2>/dev/null)
+fi`;
+  } else {
+    modelQuery = `# Claude CLI 는 안정적인 list-models 명령을 제공하지 않아 조회 없이 default + 직접 입력만 노출.`;
+  }
 
   const modelSelection = `
 # ── AI 모델 선택 (#87) — 런타임 CLI 조회 + fallback ─────────────────────────

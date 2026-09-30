@@ -1691,7 +1691,7 @@ async function runAutoSetup(
             ?? (existsSync('/Applications/ChatGPT.app/Contents/Resources/codex')
               ? '/Applications/ChatGPT.app/Contents/Resources/codex'
               : 'codex');
-        const result = spawnSync(command, ['--version'], { cwd: targetDir, stdio: 'inherit' });
+        const result = spawnSync(command, ['--version'], { cwd: targetDir, stdio: ['ignore', 'inherit', 'inherit'], shell: true });
         if (result.status !== 0) {
           throw new Error(`${provider === 'claude' ? 'Claude' : 'Codex'} CLI를 찾을 수 없습니다.`);
         }

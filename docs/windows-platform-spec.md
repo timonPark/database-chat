@@ -29,6 +29,8 @@ Windows 에서만 나타나는 플랫폼 특성과 그에 맞춰 코드에 반�
 | 5 | spawn 옵션 | 기본 (shell: false 가 default) | `{ shell: false, ... }` 명시 (인자 이스케이프 문제 방지 주석과 함께) | §1 |
 | 6 | 포트 점유 해제 | \`\`\`ts\nexecSync('lsof -ti :3111')\n  .split('\\n')\n  .forEach(pid => process.kill(Number(pid), 'SIGKILL'))\n\`\`\` | \`\`\`ts\nexecSync('netstat -ano -p tcp')\n  .split('\\n')\n  .filter(l => l.includes('LISTENING') && l.match(RegExp))\n  .forEach(pid => execSync('taskkill /PID pid /F'))\n\`\`\` | §3 |
 
+> **추가 필수 파일**: 위 6개 델타 외에 Windows 템플릿은 `scripts/generate-schema.ts` 를 반드시 포함해야 한다. Mac 의 `generate-schema.sh` 를 대체하는 Node.js 구현으로, 스캐폴더의 `hasNodeSchemaScript()` 검사가 이 파일 유무로 bash 생성 여부를 결정한다. 자세히 → §5.
+
 **LLM CLI 별 참고 사항**:
 - `claude`: `resolveClaudeBin()` 이 `where claude.cmd` 로 셈 위치를 찾아 `%dp0%\...\claude.exe` 상대 경로를 파싱
 - `codex`: Windows 는 `codex.exe` 로 설치될 수 있음 (배포 방식 확인 필요), `--sandbox read-only` 는 그대로 유지
@@ -56,7 +58,13 @@ Windows 에서 npm 전역 설치 CLI (예: `claude`) 는 `.cmd` 셈(shim) 형태
 `shell: true` 로 하면 실행은 되지만 인자를 셸 문자열로 이어붙여 넘기므로 공백 포함 한글 인자가 여러 조각으로 쪼개지고 인젝션 위험도 생긴다.
 
 ### 규칙 (Windows 템플릿 필수)
-`claude` 를 `spawn` 할 때 Windows 면 `where claude.cmd` 로 셈 위치를 찾아 그 안의 `%dp0%\...\claude.exe` 상대 경로를 파싱해 실제 `claude.exe` 절대 경로를 얻은 뒤 그 경로로 `shell: false` spawn 한다. 실패 시 문자열 `'claude'` 로 폴백.
+`claude` 를 `spawn` 할 때 Windows 면 `where claude.cmd` 로 셈 위치를 찾아 그 안의 `claude.exe` 상대 경로를 파싱해 실제 `claude.exe` 절대 경로를 얻은 뒤 그 경로로 `shell: false` spawn 한다. 실패 시 문자열 `'claude'` 로 폴백.
+
+**주의**: npm 버전에 따라 shim 내부의 경로 형식이 다르다.
+- `%~dp0\...\claude.exe` — npm v6 이하 스타일
+- `%dp0%\...\claude.exe` — npm v7+ 스타일
+
+regex 는 두 형식을 모두 커버해야 한다: `/%~?dp0%?\\([^\s"]+claude\.exe)/i`
 
 레퍼런스 구현: `claude-mongodb-wellcheck_windows_v2/server.ts` 의 `resolveClaudeBin()`.
 
@@ -81,6 +89,29 @@ Windows 에는 `lsof` 가 없다. LISTENING 상태의 PID 는 `netstat -ano -p t
 
 ### 규칙
 서버 재시작 시 포트 점유 해제 로직은 플랫폼별 분기 필요. 레퍼런스: `killPort()` 함수.
+
+---
+
+## 5. `generate-schema.ts` — bash 스크립트를 Node.js 로 대체
+
+### 특성
+Mac 템플릿은 DB 스키마 생성을 `scripts/generate-schema.sh` (bash) 로 처리한다. Windows 에서 `bash` 는 대개 WSL 런처(`System32\bash.exe`)로 잡히거나 설치되지 않으며, `python3` 도 Microsoft Store stub 이라 `.sh` 를 직접 실행할 수 없다.
+
+스캐폴더(`src/index.ts`)의 `hasNodeSchemaScript()` 함수가 템플릿에 `scripts/generate-schema.ts` 가 있는지 확인하고, 있으면 bash 기반 `.sh` 생성을 건너뛴다. 이 파일이 없으면 스캐폴더가 bash 스크립트를 생성해 Windows 에서 스키마 명령이 동작하지 않는다.
+
+### 규칙
+Windows 템플릿은 반드시 `scripts/generate-schema.ts` 를 포함해야 한다. 이 파일은 Mac 의 `generate-schema.sh` 와 동일한 흐름을 Node.js 로 구현한다:
+
+1. 대화형 AI 모델 선택 + 업데이트 범위 선택
+2. `scripts/extract-schema.ts` 로 DB 스키마 추출 (`runTsx()` — `shell: true` + npx 경유)
+3. 배치 분할 후 `resolveClaudeBin()` 으로 얻은 `claude.exe` 직접 실행 (`shell: false`)
+4. `scripts/generate-index.ts` 로 index.md · collection-mapping.md 생성
+
+`npx` 는 Windows 에서도 `.cmd` 이므로 `runTsx()` 내부는 `shell: true` 를 사용해도 된다 — 인자를 외부에서 주입하지 않는 고정 문자열이기 때문에 인젝션 위험이 없다.
+
+Claude 에게 넘기는 프롬프트는 `child.stdin.end(prompt)` 로 stdin 경유 전달 (커맨드라인 길이 제한 회피, §2 와 동일 이유).
+
+레퍼런스 구현: `templates/windows/claude-mongodb/scripts/generate-schema.ts`
 
 ---
 

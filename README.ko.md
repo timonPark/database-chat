@@ -290,7 +290,7 @@ npm run seed     # (선택) 샘플 데이터 마이그레이션
 ## 레퍼런스 문서 구조
 
 새 템플릿을 만들 때 참고하는 구성 요소 문서 폴더입니다.  
-LLM 제공자와 데이터베이스 각각의 구현 방법을 분리해 정리해두고, 이를 조합해 `templates/<llm>-<db>/`를 완성합니다.
+LLM 제공자와 데이터베이스 각각의 구현 방법을 분리해 정리해두고, 이를 조합해 `templates/mac/<llm>-<db>/` (Windows 지원 도입 시 `templates/windows/<llm>-<db>/`) 를 완성합니다.
 
 ```
 1.llm_provider/          ← LLM별 연동 방법 문서
@@ -386,7 +386,7 @@ await client.connect();
 
 ```
 1.llm_provider/claude/     ─┐
-                             ├─ 조합 → templates/claude-mongodb/
+                             ├─ 조합 → templates/mac/claude-mongodb/
 2.database/MongoDB/        ─┘
 ```
 
@@ -399,7 +399,7 @@ await client.connect();
 > clone 후 로컬 빌드 실행 방법은 상단 [빠른 시작 → 프로젝트 생성](#프로젝트-생성) 참고.
 
 1. `1.llm_provider/<llm>/`과 `2.database/<db>/` 문서를 참고해 구현 방법을 파악합니다.
-2. `templates/<llm>-<db>/` 폴더를 생성하고 필요한 파일을 작성합니다.
+2. `templates/mac/<llm>-<db>/` 폴더를 생성하고 필요한 파일을 작성합니다 (Windows 대응은 `templates/windows/<llm>-<db>/` — #138 참조).
 3. `src/index.ts`의 `AVAILABLE_COMBOS`에 `'<llm>-<db>'`를 추가합니다.
 4. `npm run build` 로 재빌드합니다 (빌드 스크립트가 `dist/index.js`에 자동으로 실행권한을 세팅합니다).
 5. `node dist/index.js my-app`으로 스캐폴딩 → `npm run schema` → `npm start`까지 검증합니다.

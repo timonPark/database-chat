@@ -2019,7 +2019,9 @@ async function main(): Promise<void> {
   // ── 프로젝트 생성 ──────────────────────────────────────────────────────────
 
   const targetDir = path.resolve(projectName);
-  const templateDir = path.join(TEMPLATES_DIR, combo);
+  // Windows 지원 (#138 · #140) 은 별도 `templates/windows/{combo}/` 로 확장 예정.
+  // 현재는 mac 고정. `process.platform === 'win32'` 감지는 #140 에서 추가.
+  const templateDir = path.join(TEMPLATES_DIR, 'mac', combo);
 
   const spinner = p.spinner();
 

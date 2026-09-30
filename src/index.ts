@@ -2019,9 +2019,27 @@ async function main(): Promise<void> {
   // ── 프로젝트 생성 ──────────────────────────────────────────────────────────
 
   const targetDir = path.resolve(projectName);
-  // Windows 지원 (#138 · #140) 은 별도 `templates/windows/{combo}/` 로 확장 예정.
-  // 현재는 mac 고정. `process.platform === 'win32'` 감지는 #140 에서 추가.
-  const templateDir = path.join(TEMPLATES_DIR, 'mac', combo);
+  // 플랫폼 감지 (#140): Windows 는 `templates/windows/{combo}/`, 나머지는 `templates/mac/{combo}/`.
+  // Windows 에서 해당 combo 의 windows template 이 아직 없으면 mac fallback + 경고 (Epic #138 진행 중).
+  const platform: 'mac' | 'windows' = process.platform === 'win32' ? 'windows' : 'mac';
+  let templateDir = path.join(TEMPLATES_DIR, platform, combo);
+  if (!existsSync(templateDir)) {
+    if (platform === 'windows') {
+      const macFallback = path.join(TEMPLATES_DIR, 'mac', combo);
+      if (existsSync(macFallback)) {
+        console.warn(pc.yellow(`⚠  Windows 전용 template (\`templates/windows/${combo}/\`) 이 아직 없어 mac template 을 fallback 사용합니다.`));
+        console.warn(pc.yellow(`   mac 전용 스크립트 (bash · .sh · homebrew 경로) 가 포함돼 있어 Windows 에서는 정상 동작하지 않을 수 있습니다.`));
+        console.warn(pc.yellow(`   진행 중인 Windows 지원은 https://github.com/timonPark/database-chat/issues/138 참조.`));
+        templateDir = macFallback;
+      } else {
+        console.error(pc.red(`오류: template 을 찾을 수 없습니다 (${templateDir}, ${macFallback}).`));
+        process.exit(1);
+      }
+    } else {
+      console.error(pc.red(`오류: template 을 찾을 수 없습니다 (${templateDir}).`));
+      process.exit(1);
+    }
+  }
 
   const spinner = p.spinner();
 

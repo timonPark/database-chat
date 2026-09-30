@@ -290,7 +290,7 @@ The seed script fills in `.env` with connection info automatically. For a remote
 ## Reference documentation layout
 
 Folders that contain the building-block documentation used when writing a new template.  
-LLM providers and databases are documented separately, then combined into `templates/<llm>-<db>/`.
+LLM providers and databases are documented separately, then combined into `templates/mac/<llm>-<db>/` (and `templates/windows/<llm>-<db>/` when Windows support lands).
 
 ```
 1.llm_provider/          ← Per-LLM integration docs
@@ -386,7 +386,7 @@ await client.connect();
 
 ```
 1.llm_provider/claude/     ─┐
-                             ├─ combined into templates/claude-mongodb/
+                             ├─ combined into templates/mac/claude-mongodb/
 2.database/MongoDB/        ─┘
 ```
 
@@ -399,7 +399,7 @@ When adding a new combination, use the docs in each folder as reference for the 
 > For running a local clone build, see [Quick start → Create the project](#create-the-project).
 
 1. Consult `1.llm_provider/<llm>/` and `2.database/<db>/` to learn the integration.
-2. Create `templates/<llm>-<db>/` and add the required files.
+2. Create `templates/mac/<llm>-<db>/` and add the required files (Windows counterpart goes under `templates/windows/<llm>-<db>/` — see #138).
 3. Add `'<llm>-<db>'` to `AVAILABLE_COMBOS` in `src/index.ts`.
 4. Rebuild with `npm run build` (the build script sets the executable bit on `dist/index.js` automatically).
 5. Verify end-to-end: `node dist/index.js my-app` → `npm run schema` → `npm start`.

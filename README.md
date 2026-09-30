@@ -37,9 +37,9 @@ The LLM never touches the database directly. It calls internal HTTP endpoints (`
 
 ### Requirements
 
-- **OS: macOS** (Windows support is planned)
+- **OS: macOS only** (Windows is **not supported yet — actively in development**)
 - Node.js 18 or later
-- CLI or API key for your chosen LLM
+- **Provider CLI pre-logged in with a subscription plan** — Claude Code (Claude), `codex` (ChatGPT), or `agy` (Antigravity). Run `claude login` / `codex login` / `agy login` **once** in the same shell/user account before starting the server. The Node.js server `spawn`s the CLI, which inherits your login session (`~/.claude/`, `~/.codex/`, `~/.antigravity/`) — no API key, no per-request token. Pay-per-use API keys are not used.
 - A database to connect to
 
 ### Create the project
@@ -64,15 +64,17 @@ An interactive prompt lets you pick the LLM provider and database.
 ┌  create-database-chat
 │
 ◆  LLM provider:
-│  ● Claude          Anthropic — claude-haiku / sonnet
-│  ○ Gemini          Google — coming soon
-│  ○ Codex           OpenAI — gpt-5.6-luna
+│  ● Claude          Anthropic — dynamic model list from docs.anthropic.com
+│  ○ Gemini          Google — dynamic model list from `agy models`
+│  ○ Codex           OpenAI — dynamic model list from `~/.codex/models_cache.json`
 └
 
 ◆  Database:
 │  ● MongoDB          document
-│  ○ MySQL            coming soon
-│  ...
+│  ○ MySQL            relational
+│  ○ PostgreSQL      relational
+│  ○ Oracle           relational
+│  ○ MSSQL            relational
 └
 
 ◆  Package manager:
@@ -117,24 +119,27 @@ When creating a project you choose between **"Create a new DB with Docker"** and
 
 ### Docker-new-DB mode (verified)
 
+> **Purpose**: quick trial. Sample data is loaded in one shot so you can see how the app works end-to-end without preparing your own database. Not intended for production use.
+
 | | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Claude** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Gemini** | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
+| **Gemini** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Codex**  | ✅ | ✅ | ✅ | ✅[^1] | ✅ |
 
 [^1]: Codex + Oracle: the `.env` auto-fill from `docker-compose.yml` doesn't yet cover Oracle's `APP_USER` / `APP_USER_PASSWORD` / `DB_SERVICE_NAME=FREEPDB1`, so edit `.env` manually after `docker compose up`. Same gap exists for `claude-oracle`.
 
-### Existing-DB mode (unverified)
+### Existing-DB mode (verified)
 
-The templates are generated, but end-to-end validation against real remote/existing databases hasn't been done. Please open an [issue](https://github.com/timonPark/database-chat/issues) if you hit a problem.
+> **Purpose**: connect to your own database (local or remote). Real use case — supply your own credentials in `.env` and query production/staging data directly.
 
 | | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **Claude** | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
-| **Codex**  | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+| **Claude** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Gemini** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Codex**  | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-✅ verified · ⚠️ template generation confirmed only (not tested end-to-end) · 🔜 coming soon
+✅ verified end-to-end
 
 ### Sample data (`npm run seed`)
 
@@ -200,6 +205,11 @@ my-app/
 | `CLAUDE_MAX_TURNS` | Max turns for Claude (Claude provider only) | `10` |
 | `CODEX_MODEL` | Codex model (Codex provider only) | `gpt-5.6-luna` |
 | `CODEX_CLI_PATH` | Codex CLI binary path when not on `PATH` (Codex provider only) | `/Applications/ChatGPT.app/Contents/Resources/codex` |
+| `GEMINI_MODEL` | Gemini model (Gemini provider only) | `gemini-3.8-flash-medium` |
+| `GEMINI_PRINT_TIMEOUT` | `agy --print-timeout` value (Gemini provider only) | `5m` |
+| `AGY_CLI_PATH` | Antigravity CLI (`agy`) binary path when not on `PATH` (Gemini provider only) | `/opt/homebrew/bin/agy` |
+
+> `npm run schema` fetches supported models at runtime — Claude via `docs.anthropic.com` (current section), Gemini via `agy models`, Codex via `~/.codex/models_cache.json`. `*_MODEL` above is the fallback default when discovery fails.
 
 ### Per-DB differences
 
@@ -305,7 +315,7 @@ Each LLM-provider folder documents how the server invokes that LLM.
 | `README.md` | Provider overview, official docs link, prerequisites |
 | `spawn.md` | How to run the LLM as a subprocess from the server (CLI command, args, stream handling) |
 | `system-prompt.md` | Guide for writing the system prompt for a DB-query assistant |
-| `env.md` | Required environment variables (API key, model name, max turns, etc.) |
+| `env.md` | Required environment variables (model name, CLI path, max turns, etc.) |
 | `models.md` | Available models and speed/cost/quality comparison |
 
 **Example — `1.llm_provider/claude/spawn.md`**
@@ -405,9 +415,13 @@ const AVAILABLE_COMBOS = new Set([
   'codex-mongodb',
   'codex-mysql',
   'codex-postgresql',
-  'codex-oracle',
   'codex-mssql',
-  // 'gemini-<db>' — coming soon
+  'codex-oracle',
+  'gemini-mongodb',
+  'gemini-mysql',
+  'gemini-postgresql',
+  'gemini-oracle',
+  'gemini-mssql',
 ]);
 ```
 

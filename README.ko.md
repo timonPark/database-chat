@@ -37,9 +37,9 @@ LLM은 직접 DB에 접근하지 않고 서버 내부 HTTP 엔드포인트(`/db-
 
 ### 요구사항
 
-- **OS: macOS** (Windows 는 추후 추가 예정)
+- **OS: macOS 전용** (Windows 는 **현재 미지원 — 개발 진행 중**)
 - Node.js 18 이상
-- 선택한 LLM의 CLI 또는 API 키
+- **구독 플랜으로 사전 로그인된 provider CLI** — Claude Code (Claude), `codex` (ChatGPT), `agy` (Antigravity) 중 하나. 서버 실행 전에 동일 사용자 계정에서 `claude login` / `codex login` / `agy login` 을 **한 번** 실행해두면 됩니다. Node.js 서버가 CLI 를 `spawn` 할 때 사용자 홈의 로그인 세션 (`~/.claude/`, `~/.codex/`, `~/.antigravity/`) 을 자연스럽게 상속받아 동작하며, API 키·요청별 토큰은 필요하지 않습니다. 종량제 API 는 지원하지 않습니다.
 - 연결할 데이터베이스
 
 ### 프로젝트 생성
@@ -64,15 +64,17 @@ node dist/index.js my-app
 ┌  create-database-chat
 │
 ◆  LLM provider:
-│  ● Claude          Anthropic — claude-haiku / sonnet
-│  ○ Gemini          Google — coming soon
-│  ○ Codex           OpenAI — gpt-5.6-luna
+│  ● Claude          Anthropic — docs.anthropic.com 에서 모델 목록 실시간 조회
+│  ○ Gemini          Google — `agy models` 로 모델 목록 실시간 조회
+│  ○ Codex           OpenAI — `~/.codex/models_cache.json` 에서 모델 목록 실시간 조회
 └
 
 ◆  Database:
 │  ● MongoDB          document
-│  ○ MySQL            coming soon
-│  ...
+│  ○ MySQL            relational
+│  ○ PostgreSQL      relational
+│  ○ Oracle           relational
+│  ○ MSSQL            relational
 └
 
 ◆  Package manager:
@@ -117,24 +119,27 @@ npm start
 
 ### Docker 새 DB 모드 (검증 완료)
 
+> **용도**: 맛보기 · 데모. 샘플 데이터가 한 번에 세팅되어, 별도 DB 준비 없이 앱이 어떻게 동작하는지 end-to-end 로 체험해 볼 수 있습니다. 프로덕션 용도는 아닙니다.
+
 | | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
 |---|:---:|:---:|:---:|:---:|:---:|
 | **Claude** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Gemini** | 🔜 | 🔜 | 🔜 | 🔜 | 🔜 |
+| **Gemini** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Codex**  | ✅ | ✅ | ✅ | ✅[^1] | ✅ |
 
 [^1]: Codex + Oracle: `docker-compose.yml`에서 `.env`로 자동 반영되는 값 목록에 Oracle의 `APP_USER` / `APP_USER_PASSWORD` / `DB_SERVICE_NAME=FREEPDB1`가 아직 포함돼 있지 않아 `docker compose up` 이후 `.env`를 수동 편집해야 합니다. `claude-oracle`도 동일한 갭입니다.
 
-### 기존 DB 연동 모드 (미검증)
+### 기존 DB 연동 모드 (검증 완료)
 
-템플릿 자체는 생성되지만, 실제 원격/기존 DB 를 붙여서 end-to-end 로 확인한 사례는 아직 없습니다. 사용 중 이슈가 있으면 [이슈](https://github.com/timonPark/database-chat/issues)로 남겨주세요.
+> **용도**: 실사용. 로컬·원격에 이미 있는 자신의 DB 에 붙어 프로덕션·스테이징 데이터를 그대로 질의합니다. `.env` 에 접속 정보만 넣으면 됩니다.
 
 | | MongoDB | MySQL | PostgreSQL | Oracle | MSSQL |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **Claude** | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
-| **Codex**  | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+| **Claude** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Gemini** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Codex**  | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-✅ 검증 완료 · ⚠️ 템플릿 생성만 확인 (실환경 미검증) · 🔜 준비 중
+✅ end-to-end 검증 완료
 
 ### 샘플 데이터 (`npm run seed`)
 
@@ -200,6 +205,11 @@ my-app/
 | `CLAUDE_MAX_TURNS` | Claude 최대 턴 수 (Claude 전용) | `10` |
 | `CODEX_MODEL` | 사용할 Codex 모델 (Codex 전용) | `gpt-5.6-luna` |
 | `CODEX_CLI_PATH` | Codex CLI 바이너리 경로 — `PATH`에 없을 때 지정 (Codex 전용) | `/Applications/ChatGPT.app/Contents/Resources/codex` |
+| `GEMINI_MODEL` | 사용할 Gemini 모델 (Gemini 전용) | `gemini-3.8-flash-medium` |
+| `GEMINI_PRINT_TIMEOUT` | `agy --print-timeout` 값 (Gemini 전용) | `5m` |
+| `AGY_CLI_PATH` | Antigravity CLI(`agy`) 바이너리 경로 — `PATH`에 없을 때 지정 (Gemini 전용) | `/opt/homebrew/bin/agy` |
+
+> `npm run schema` 는 실행 시점에 지원 모델을 실시간 조회합니다 — Claude 는 `docs.anthropic.com` (현재 지원 섹션), Gemini 는 `agy models`, Codex 는 `~/.codex/models_cache.json` 사용. 위 `*_MODEL` 은 조회 실패 시 fallback 기본값입니다.
 
 ### DB별 차이
 
@@ -305,7 +315,7 @@ LLM 제공자와 데이터베이스 각각의 구현 방법을 분리해 정리�
 | `README.md` | 제공자 개요, 공식 문서 링크, 사전 설치 요건 |
 | `spawn.md` | 서버에서 LLM을 subprocess로 실행하는 방법 (CLI 명령어, 인수, stream 수신 방식) |
 | `system-prompt.md` | DB 조회 어시스턴트용 시스템 프롬프트 작성 가이드 |
-| `env.md` | 필요한 환경변수 목록 및 설명 (API 키, 모델명, 최대 턴 수 등) |
+| `env.md` | 필요한 환경변수 목록 및 설명 (모델명, CLI 경로, 최대 턴 수 등) |
 | `models.md` | 사용 가능한 모델 목록과 속도·비용·품질 비교 |
 
 **예시 — `1.llm_provider/claude/spawn.md`**
@@ -405,9 +415,13 @@ const AVAILABLE_COMBOS = new Set([
   'codex-mongodb',
   'codex-mysql',
   'codex-postgresql',
-  'codex-oracle',
   'codex-mssql',
-  // 'gemini-<db>' — 준비 중
+  'codex-oracle',
+  'gemini-mongodb',
+  'gemini-mysql',
+  'gemini-postgresql',
+  'gemini-oracle',
+  'gemini-mssql',
 ]);
 ```
 

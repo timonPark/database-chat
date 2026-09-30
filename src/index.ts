@@ -334,11 +334,32 @@ set -euo pipefail
 
 # nvm 자동 활성화 (Node.js 18+ 필요)
 export NVM_DIR="\${NVM_DIR:-\$HOME/.nvm}"
-[ -s "\$NVM_DIR/nvm.sh" ] && source "\$NVM_DIR/nvm.sh"
-NODE_MAJOR=\$(node -e "process.stdout.write(process.version.split('.')[0].slice(1))" 2>/dev/null || echo "0")
+if [ -s "\$NVM_DIR/nvm.sh" ]; then
+  # yarn 은 자식 프로세스에 PREFIX / npm_config_prefix 를 주입하는데
+  # nvm 이 이를 감지해 즉시 실패 (nvm-sh/nvm#3421). npm · pnpm 은 이 변수를 세팅하지 않음.
+  unset PREFIX npm_config_prefix
+  # shellcheck source=/dev/null
+  source "\$NVM_DIR/nvm.sh"
+fi
+
+_node_major() {
+  node -e "process.stdout.write(process.version.split('.')[0].slice(1))" 2>/dev/null || echo "0"
+}
+NODE_MAJOR=\$(_node_major)
+# yarn 이 스폰한 bash 는 nvm 의 shim PATH 를 물려받지 못해 시스템 Node (구버전) 를 잡을 수 있음.
+# nvm.sh 는 source 만으로 버전을 바꾸지 않으므로, 여기서 명시적으로 승격 시도.
+if [ "\$NODE_MAJOR" -lt 18 ] 2>/dev/null && command -v nvm >/dev/null 2>&1; then
+  # 시도 순서: LTS alias → 설치된 최신 (nvm 의 built-in 'node' alias) → default alias
+  # 'node' 는 nvm 이 설치된 버전 중 가장 높은 것으로 항상 resolve 되므로 사용자가 v22 를 깔았다면 확실히 잡힘
+  nvm use --lts >/dev/null 2>&1 \
+    || nvm use node >/dev/null 2>&1 \
+    || nvm use default >/dev/null 2>&1 \
+    || true
+  NODE_MAJOR=\$(_node_major)
+fi
 if [ "\$NODE_MAJOR" -lt 18 ] 2>/dev/null; then
   echo "⚠  Node.js 18+ 필요 (현재: \$(node --version 2>/dev/null || echo '없음'))"
-  echo "   nvm use v22 를 실행하거나 Node.js 버전을 업그레이드하세요."
+  echo "   nvm use --lts 를 실행하거나 Node.js 버전을 업그레이드하세요."
   exit 1
 fi
 
@@ -619,7 +640,7 @@ PROMPT_EOF
 
   claude -p "\$(cat /tmp/_schema_batch_prompt.txt)" \\
     --allowedTools Bash \\
-    --model "\$MODEL_VALUE" > /tmp/_schema_claude.log 2>&1 &
+    --model "\$MODEL_VALUE" </dev/null > /tmp/_schema_claude.log 2>&1 &
   _CLAUDE_PID=\$!
 
   _SEEN=""
@@ -822,9 +843,13 @@ ${finalMdFormats}
 - 건수 기준 내림차순으로 정렬하세요
 FINAL_EOF
 
+# yarn 은 자식 프로세스의 stdin 을 pipe 로 열어 상속시켜 Claude CLI 가 대기 상태에 빠질 수 있음.
+# < /dev/null 로 명시적 close. 또한 기존 placeholder 가 있으면 LLM 이 '이미 있으니 스킵' 으로 판단할 수 있어 사전 삭제.
+rm -f "index.md" "${mappingFile}"
+
 claude -p "\$(cat /tmp/_schema_final_prompt.txt)" \\
   --allowedTools Bash \\
-  --model "\$MODEL_VALUE" > /tmp/_schema_claude.log 2>&1 || { echo "최종 단계 오류:"; cat /tmp/_schema_claude.log; exit 1; }`;
+  --model "\$MODEL_VALUE" </dev/null > /tmp/_schema_claude.log 2>&1 || { echo "최종 단계 오류:"; cat /tmp/_schema_claude.log; exit 1; }`;
   } else if (provider === 'gemini') {
     finalCall = `cat > /tmp/_schema_final_prompt.txt <<FINAL_EOF
 아래는 ${dbDisplayName} 데이터베이스 \\\`\${DB_NAME}\\\`의 전체 ${entityLabel} 정보입니다:

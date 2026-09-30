@@ -874,7 +874,7 @@
     // ── 셀 포맷터 (columns[i].type 기반) ─────────────────────────────────────
     function fmtOid(v) {
       const s = typeof v === 'string' ? v : (v && v.$oid) || String(v);
-      const short = s.length > 8 ? s.slice(0, 8) : s;
+      const short = s;
       return `<span class="cell-oid" title="${escapeHtml(s)}">${escapeHtml(short)}</span>`;
     }
 

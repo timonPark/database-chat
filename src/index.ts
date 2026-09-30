@@ -401,10 +401,10 @@ if [ -z "\$CODEX_BIN" ]; then
 fi
 `;
 
-  // ── #87 · #95: AI 모델 선택 — provider CLI 로 런타임 조회 + fallback ────
+  // ── #87 · #94 · #95: AI 모델 선택 — provider별 최적 소스로 런타임 조회 + fallback
   // gemini: `agy models` 서브커맨드 파싱.
   // codex: 별도 list-models 서브커맨드 없음. ~/.codex/models_cache.json (codex CLI 가 자체 유지) 에서 slug 추출.
-  // claude: 안정적인 list-models 경로 없음 → default + 직접 입력.
+  // claude: 안정적인 list-models 경로 없음. Anthropic docs 페이지 크롤 (오프라인 시 alias fallback).
   let modelQuery: string;
   if (provider === 'gemini') {
     modelQuery = `echo "  (agy models 로 지원 모델 조회 중...)"
@@ -431,7 +431,29 @@ except Exception: pass
 " 2>/dev/null)
 fi`;
   } else {
-    modelQuery = `# Claude CLI 는 안정적인 list-models 명령을 제공하지 않아 조회 없이 default + 직접 입력만 노출.`;
+    // claude: Anthropic docs 페이지 (platform.claude.com 으로 리다이렉트) 에서 현재 지원 모델 크롤.
+    // 페이지에 있는 slug 를 그대로 뽑으면 "Legacy models" 섹션까지 포함돼 subscription 이 접근 못하는
+    // claude-haiku-3-5 등이 섞이므로, Legacy 섹션 이전 (=현재 지원) 만 대상.
+    // 현재 섹션은 slug 대신 "Haiku 4.5" / "Sonnet 5.5" / "Opus 5.5" 형태로 표기돼 slug 로 변환한다.
+    // 오프라인·타임아웃·페이지 구조 변경 시 alias 3개 fallback (CLI 가 alias 항상 지원).
+    modelQuery = `_DOCS_URL="https://docs.anthropic.com/en/docs/about-claude/models"
+echo "  (Anthropic docs 에서 모델 목록 조회 중...)"
+_HTML=\$(curl -sL --max-time 5 "\$_DOCS_URL" 2>/dev/null || true)
+if [ -n "\$_HTML" ]; then
+  # "Legacy models" 이전 섹션만 사용 (해당 문자열이 없으면 전체 HTML)
+  _CUR=\$(printf '%s' "\$_HTML" | awk 'BEGIN{RS="Legacy models"} NR==1{print}')
+  while IFS= read -r _model; do
+    [ -n "\$_model" ] && _MODELS+=("\$_model")
+  done < <(printf '%s' "\$_CUR" \\
+    | grep -oE '(Haiku|Sonnet|Opus) [0-9]+\\.[0-9]+' \\
+    | awk '{tier=tolower(\$1); ver=\$2; gsub(/\\./, "-", ver); print "claude-" tier "-" ver}' \\
+    | sort -u -r)
+fi
+
+# 크롤 실패 시 default + alias 3개 (CLI 가 alias 를 latest 로 항상 resolve)
+if [ \${#_MODELS[@]} -eq 0 ]; then
+  _MODELS=("haiku" "sonnet" "opus")
+fi`;
   }
 
   const modelSelection = `
@@ -444,6 +466,15 @@ ${modelQuery}
 # 조회 결과가 없으면 default 하나만 후보로 둔다.
 if [ \${#_MODELS[@]} -eq 0 ]; then
   _MODELS+=("\$_DEFAULT_MODEL")
+else
+  # 조회 성공했는데 default 가 리스트에 없으면 맨 앞에 추가 (default 마커 유지 · 사용자가 default 를 놓치지 않도록)
+  _has_default=0
+  for _m in "\${_MODELS[@]}"; do
+    [ "\$_m" = "\$_DEFAULT_MODEL" ] && _has_default=1
+  done
+  if [ "\$_has_default" -eq 0 ]; then
+    _MODELS=("\$_DEFAULT_MODEL" "\${_MODELS[@]}")
+  fi
 fi
 
 echo "사용할 AI 모델을 선택하세요:"

@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "./dist",
+    "rootDir": "./"
+  },
+  "include": ["server.ts", "scripts/load-schema-index.ts", "scripts/pipeline-analyze.ts", "scripts/build-columns.ts"],
+  "exclude": ["node_modules", "dist"]
+}

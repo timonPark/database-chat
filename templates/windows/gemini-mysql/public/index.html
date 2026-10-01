@@ -1,0 +1,1307 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini MySQL Chat</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 10px 20px;
+      background: #16213e;
+      border-bottom: 1px solid #0f3460;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .header-left h1 {
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .header-left .updated-at {
+      font-size: 0.72rem;
+      color: #5a7fa0;
+      margin-top: 2px;
+    }
+
+    #table-info-btn {
+      padding: 5px 14px;
+      border-radius: 8px;
+      border: 1px solid #2a4a6a;
+      background: transparent;
+      color: #7ab3e0;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      white-space: nowrap;
+    }
+
+    #table-info-btn:hover { background: #1a3a5a; color: #b0d4f0; }
+
+    .header-actions { display: flex; gap: 8px; }
+
+    #erd-btn {
+      padding: 5px 14px;
+      border-radius: 8px;
+      border: 1px solid #2a4a6a;
+      background: transparent;
+      color: #7ab3e0;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, opacity 0.15s;
+      white-space: nowrap;
+    }
+    #erd-btn:hover:not(:disabled) { background: #1a3a5a; color: #b0d4f0; }
+    #erd-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #erd-modal .modal-box { width: min(96vw, 1400px); max-height: 92vh; }
+    #erd-canvas {
+      flex: 1;
+      overflow: auto;
+      background: #0d1729;
+      padding: 12px;
+    }
+    #erd-canvas svg { max-width: none; height: auto; }
+    .erd-empty { padding: 24px; color: #7ab3e0; text-align: center; font-size: 0.9rem; }
+
+    /* 모달 */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal-box {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 12px;
+      width: min(780px, 94vw);
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      border-bottom: 1px solid #0f3460;
+      font-size: 0.95rem;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: #5a7fa0;
+      font-size: 1.1rem;
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .modal-close:hover { color: #e0e0e0; background: #2a3a5a; }
+
+    .modal-search {
+      flex-shrink: 0;
+      padding: 10px 20px;
+      border-bottom: 1px solid #0f3460;
+      background: #16213e;
+    }
+
+    .modal-search input {
+      width: 100%;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #2a4a6a;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-size: 0.85rem;
+      outline: none;
+    }
+
+    .modal-search input:focus { border-color: #4a90d9; }
+
+    .modal-no-result {
+      padding: 20px;
+      text-align: center;
+      color: #4a7a9b;
+      font-size: 0.85rem;
+    }
+
+    .modal-body {
+      overflow-y: auto;
+      padding: 20px;
+      font-size: 0.85rem;
+      line-height: 1.6;
+    }
+
+    .modal-body table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 8px 0;
+    }
+
+    .modal-body th, .modal-body td {
+      border: 1px solid #2a3a5a;
+      padding: 7px 12px;
+      text-align: left;
+    }
+
+    .modal-body th {
+      background: #1a2a4a;
+      color: #a0c4e0;
+      font-weight: 600;
+    }
+
+    .modal-body tr:nth-child(even) td { background: #1a1f35; }
+
+    .modal-body code {
+      background: #0f1a2e;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.82rem;
+      color: #7ab3e0;
+    }
+
+    .modal-body h1, .modal-body h2, .modal-body h3 {
+      color: #a0c4e0;
+      margin: 14px 0 6px;
+    }
+
+    .modal-body p { margin: 6px 0; }
+
+    #chat-window {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .msg-wrapper {
+      max-width: 78%;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .msg-wrapper.user { align-self: flex-end; align-items: flex-end; }
+    .msg-wrapper.assistant { align-self: flex-start; align-items: flex-start; }
+
+    .bubble-time {
+      font-size: 0.70rem;
+      color: #4a7a9b;
+      font-family: monospace;
+      padding: 0 4px;
+    }
+
+    .bubble {
+      padding: 10px 14px;
+      border-radius: 16px;
+      line-height: 1.55;
+      font-size: 0.92rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      width: 100%;
+    }
+
+    .bubble.user {
+      background: #0f3460;
+      border-bottom-right-radius: 4px;
+      color: #ddeeff;
+    }
+
+    .bubble.assistant {
+      background: #2a2a3e;
+      border-bottom-left-radius: 4px;
+      color: #e0e0e0;
+    }
+
+    .bubble.progress {
+      font-size: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      white-space: normal;
+    }
+
+    .progress-step {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: #7ab3e0;
+    }
+
+    .progress-step .step-time {
+      font-family: monospace;
+      font-size: 0.75rem;
+      color: #4a7a9b;
+      flex-shrink: 0;
+    }
+
+    .progress-step.done {
+      color: #5a8a5a;
+    }
+
+    .progress-step .spinner {
+      width: 10px;
+      height: 10px;
+      border: 2px solid #4a90d9;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+
+    .progress-step.done .spinner {
+      border: none;
+      animation: none;
+      width: 10px;
+      text-align: center;
+    }
+
+    .progress-step.done .spinner::after {
+      content: '✓';
+      font-size: 0.8rem;
+      color: #5a8a5a;
+    }
+
+    .progress-log {
+      margin-left: 17px;
+      background: #1a1a2e;
+      border-left: 2px solid #0f3460;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.78rem;
+      color: #8899bb;
+      white-space: pre;
+      overflow-x: auto;
+    }
+
+    .result-divider {
+      border: none;
+      border-top: 1px solid #2a3a5a;
+      margin: 6px 0 4px;
+    }
+
+    .result-text {
+      font-size: 0.92rem;
+      line-height: 1.55;
+      color: #e0e0e0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .result-data {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .result-badges {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 0.78rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 10px;
+      background: #1a2a4a;
+      color: #a0c4e0;
+      border: 1px solid #2a4a6a;
+    }
+
+    .badge.partial {
+      background: #3a2f1a;
+      color: #d9c07a;
+      border-color: #5a4a2a;
+    }
+
+    .empty-card {
+      padding: 16px 18px;
+      background: #1a2a3a;
+      border: 1px solid #2a4a6a;
+      border-radius: 8px;
+      color: #7ab3e0;
+      font-size: 0.88rem;
+      text-align: center;
+    }
+
+    .result-table-wrap {
+      overflow-x: auto;
+      overflow-y: auto;
+      max-height: 480px;
+      border: 1px solid #2a3a5a;
+      border-radius: 8px;
+      background: #0f1a2e;
+    }
+
+    table.result-table {
+      border-collapse: separate;
+      border-spacing: 0;
+      width: max-content;
+      min-width: 100%;
+      font-size: 0.82rem;
+    }
+
+    table.result-table th,
+    table.result-table td {
+      padding: 6px 10px;
+      border-bottom: 1px solid #1a2a4a;
+      border-right: 1px solid #1a2a4a;
+      text-align: left;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+
+    table.result-table th {
+      position: sticky;
+      top: 0;
+      background: #1a2a4a;
+      color: #b0d4f0;
+      font-weight: 600;
+      font-size: 0.78rem;
+      z-index: 1;
+    }
+
+    table.result-table th.unmapped {
+      background: #2a2a3a;
+      color: #8899aa;
+    }
+
+    table.result-table th .th-key {
+      display: block;
+      font-family: monospace;
+      font-size: 0.68rem;
+      color: #6a8ab0;
+      font-weight: normal;
+      margin-top: 2px;
+    }
+
+    table.result-table th.unmapped .th-key { color: #667788; }
+
+    table.result-table tr:nth-child(even) td { background: #131e33; }
+    table.result-table tr:hover td { background: #1a2540; }
+
+    .cell-oid, .cell-mono {
+      font-family: monospace;
+      font-size: 0.78rem;
+      color: #a0c4e0;
+    }
+
+    .cell-bool-t { color: #6ab86a; }
+    .cell-bool-f { color: #b86a6a; }
+    .cell-null { color: #556; }
+
+    .cell-nested {
+      background: none;
+      border: none;
+      padding: 0;
+      color: #7ab3e0;
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-family: inherit;
+    }
+
+    .cell-nested:hover { text-decoration: underline; }
+
+    .nested-json {
+      display: none;
+      margin-top: 4px;
+      padding: 6px 8px;
+      background: #0a1220;
+      border: 1px solid #1a2a4a;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.72rem;
+      color: #a0c4e0;
+      white-space: pre;
+      max-height: 220px;
+      overflow: auto;
+    }
+
+    .nested-json.open { display: block; }
+
+    .truncate-notice {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 10px;
+      padding: 7px 10px;
+      border-radius: 6px;
+      background: #1e2d1e;
+      border: 1px solid #3a5a3a;
+      color: #7ab87a;
+      font-size: 0.78rem;
+    }
+
+    .result-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .action-btn {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border: 1px solid #2a3a5a;
+      border-radius: 6px;
+      background: transparent;
+      color: #5a7fa0;
+      cursor: pointer;
+      font-size: 0.75rem;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .action-btn:hover { color: #a0c4e0; border-color: #4a7a9b; }
+    .action-btn.copied { color: #5a8a5a; border-color: #5a8a5a; }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    #input-area {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px 16px 12px;
+      background: #16213e;
+      border-top: 1px solid #0f3460;
+      position: sticky;
+      bottom: 0;
+    }
+
+    #limit-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #limit-label {
+      font-size: 0.75rem;
+      color: #4a7a9b;
+    }
+
+    #limit-select {
+      background: #1a1a2e;
+      border: 1px solid #1a3a5a;
+      border-radius: 6px;
+      color: #7ab3e0;
+      font-size: 0.75rem;
+      padding: 3px 8px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    #limit-select:focus { border-color: #4a90d9; }
+
+    #limit-custom {
+      width: 72px;
+      background: #1a1a2e;
+      border: 1px solid #1a3a5a;
+      border-radius: 6px;
+      color: #7ab3e0;
+      font-size: 0.75rem;
+      padding: 3px 8px;
+      outline: none;
+    }
+
+    #limit-custom:focus { border-color: #4a90d9; }
+
+    #input-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    #input-row #user-input {
+      flex: 1;
+      padding: 10px 14px;
+      border-radius: 22px;
+      border: 1px solid #0f3460;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-size: 0.92rem;
+      outline: none;
+      resize: none;
+      line-height: 1.4;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+
+    #input-row #user-input:focus { border-color: #4a90d9; }
+
+    #send-btn {
+      padding: 0 18px;
+      border-radius: 22px;
+      border: none;
+      background: #4a90d9;
+      color: #fff;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.2s;
+      flex-shrink: 0;
+    }
+
+    #send-btn:hover:not(:disabled) { background: #357abd; }
+    #send-btn:disabled { background: #2a4a6a; cursor: not-allowed; }
+
+    #stop-btn {
+      padding: 0 18px;
+      border-radius: 22px;
+      border: none;
+      background: #8b2020;
+      color: #fff;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.2s;
+      flex-shrink: 0;
+      display: none;
+    }
+
+    #stop-btn:hover { background: #a83232; }
+
+    @media (max-width: 480px) {
+      .msg-wrapper { max-width: 90%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>Gemini MySQL Chat</h1>
+      <div class="updated-at" id="updated-at"></div>
+    </div>
+    <div class="header-actions">
+      <button id="erd-btn" title="먼저 pnpm run erd 를 실행하세요" disabled>ERD 보기</button>
+      <button id="table-info-btn">테이블 정보</button>
+    </div>
+  </header>
+
+  <div id="erd-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span>ERD (테이블 관계 다이어그램)</span>
+        <button class="modal-close" id="erd-modal-close">✕</button>
+      </div>
+      <div id="erd-canvas"></div>
+    </div>
+  </div>
+
+  <div id="table-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span>테이블 정보</span>
+        <button class="modal-close" id="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-search">
+        <input type="text" id="modal-search-input" placeholder="테이블명 또는 설명으로 검색...">
+      </div>
+      <div class="modal-body" id="modal-content"></div>
+    </div>
+  </div>
+
+  <div id="chat-window"></div>
+
+  <div id="input-area">
+    <div id="limit-row">
+      <span id="limit-label">최대 조회 건수</span>
+      <select id="limit-select">
+        <option value="20">20건</option>
+        <option value="50">50건</option>
+        <option value="100">100건</option>
+        <option value="200">200건</option>
+        <option value="500">500건</option>
+        <option value="custom">직접 입력</option>
+      </select>
+      <input type="number" id="limit-custom" min="1" placeholder="건수" style="display:none">
+    </div>
+    <div id="input-row">
+      <textarea id="user-input" rows="1" placeholder="자연어로 데이터를 조회하세요..."></textarea>
+      <button id="stop-btn">중지</button>
+      <button id="send-btn">전송</button>
+    </div>
+  </div>
+
+  <script>
+    const chatWindow = document.getElementById('chat-window');
+    const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    const stopBtn = document.getElementById('stop-btn');
+
+    let currentRequestId = null;
+
+    // 테이블 정보 모달
+    const tableModal = document.getElementById('table-modal');
+    const modalContent = document.getElementById('modal-content');
+    const modalSearchInput = document.getElementById('modal-search-input');
+
+    function filterModalRows(q) {
+      const term = q.trim().toLowerCase();
+
+      // 모든 요소 초기화
+      modalContent.querySelectorAll('table, tr, h1, h2, h3, h4, p, hr')
+        .forEach(el => el.style.display = '');
+
+      const noResult = modalContent.querySelector('.modal-no-result');
+      if (!term) {
+        if (noResult) noResult.style.display = 'none';
+        return;
+      }
+
+      let totalVisible = 0;
+
+      modalContent.querySelectorAll('table').forEach(table => {
+        const rows = table.querySelectorAll('tbody tr');
+        let visibleCount = 0;
+        rows.forEach(row => {
+          const match = row.textContent.toLowerCase().includes(term);
+          row.style.display = match ? '' : 'none';
+          if (match) visibleCount++;
+        });
+
+        // 매칭 행이 없으면 테이블과 앞쪽 제목/단락도 숨김
+        if (visibleCount === 0) {
+          table.style.display = 'none';
+          let el = table.previousElementSibling;
+          while (el && el.tagName !== 'TABLE') {
+            el.style.display = 'none';
+            el = el.previousElementSibling;
+          }
+        } else {
+          totalVisible += visibleCount;
+        }
+      });
+
+      let nr = modalContent.querySelector('.modal-no-result');
+      if (totalVisible === 0) {
+        if (!nr) {
+          nr = document.createElement('div');
+          nr.className = 'modal-no-result';
+          modalContent.appendChild(nr);
+        }
+        nr.textContent = `"${q}" 에 해당하는 테이블이 없습니다.`;
+        nr.style.display = '';
+      } else if (nr) {
+        nr.style.display = 'none';
+      }
+    }
+
+    document.getElementById('table-info-btn').addEventListener('click', async () => {
+      if (!modalContent.innerHTML) {
+        const res = await fetch('/meta/table-info');
+        const { content } = await res.json();
+        modalContent.innerHTML = marked.parse(content);
+      }
+      modalSearchInput.value = '';
+      filterModalRows('');
+      tableModal.style.display = 'flex';
+      modalSearchInput.focus();
+    });
+
+    modalSearchInput.addEventListener('input', (e) => filterModalRows(e.target.value));
+
+    // ── ERD 모달 ─────────────────────────────────────────────────────────────
+    const erdBtn = document.getElementById('erd-btn');
+    const erdModal = document.getElementById('erd-modal');
+    const erdCanvas = document.getElementById('erd-canvas');
+    let erdRendered = false;
+    let erdContent = null;
+
+    // Mermaid 초기화 (다크 테마)
+    if (window.mermaid) {
+      window.mermaid.initialize({
+        startOnLoad: false,
+        theme: 'dark',
+        securityLevel: 'loose',
+        maxTextSize: 500000,
+        maxEdges: 2000,
+        er: { useMaxWidth: false },
+      });
+    }
+
+    // 로드 시 ERD 가용 여부 확인
+    (async () => {
+      try {
+        const res = await fetch('/meta/erd');
+        const data = await res.json();
+        if (data.available && data.content) {
+          erdContent = data.content;
+          erdBtn.disabled = false;
+          erdBtn.title = 'ERD 다이어그램 보기';
+        } else {
+          erdBtn.disabled = true;
+          erdBtn.title = '먼저 pnpm run erd 를 실행하세요';
+        }
+      } catch (err) {
+        erdBtn.disabled = true;
+        erdBtn.title = 'ERD 데이터를 가져오지 못했습니다: ' + err.message;
+      }
+    })();
+
+    erdBtn.addEventListener('click', async () => {
+      if (erdBtn.disabled || !erdContent) return;
+      erdModal.style.display = 'flex';
+      if (erdRendered) return;
+      erdCanvas.innerHTML = '<div class="erd-empty">렌더링 중... (엔티티가 많으면 최대 수십 초 걸릴 수 있습니다)</div>';
+      try {
+        const { svg } = await window.mermaid.render('erd-svg-' + Date.now(), erdContent);
+        erdCanvas.innerHTML = svg;
+        erdRendered = true;
+        const svgEl = erdCanvas.querySelector('svg');
+        if (svgEl && window.svgPanZoom) {
+          svgEl.style.width = '100%';
+          svgEl.style.height = '85vh';
+          window.svgPanZoom(svgEl, {
+            zoomEnabled: true,
+            controlIconsEnabled: true,
+            fit: true,
+            center: true,
+            minZoom: 0.1,
+            maxZoom: 20,
+          });
+        }
+      } catch (err) {
+        erdCanvas.innerHTML = '<div class="erd-empty">ERD 렌더링 실패: ' + (err.message || err) + '</div>';
+      }
+    });
+
+    document.getElementById('erd-modal-close').addEventListener('click', () => {
+      erdModal.style.display = 'none';
+    });
+    erdModal.addEventListener('click', (e) => {
+      if (e.target === erdModal) erdModal.style.display = 'none';
+    });
+
+    document.getElementById('modal-close-btn').addEventListener('click', () => {
+      tableModal.style.display = 'none';
+    });
+
+    tableModal.addEventListener('click', (e) => {
+      if (e.target === tableModal) tableModal.style.display = 'none';
+    });
+
+    function typewriter(el, text) {
+      return new Promise(resolve => {
+        if (!text) { resolve(); return; }
+        let i = 0;
+        const charsPerFrame = Math.max(1, Math.ceil(text.length / 200)); // ~3s at 60fps
+        function frame() {
+          i = Math.min(i + charsPerFrame, text.length);
+          el.textContent = text.slice(0, i);
+          chatWindow.scrollTop = chatWindow.scrollHeight;
+          if (i < text.length) requestAnimationFrame(frame);
+          else resolve();
+        }
+        requestAnimationFrame(frame);
+      });
+    }
+
+    const SVG_COPY = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+    const SVG_CHECK = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+    const SVG_DOWNLOAD = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+
+    async function exportToExcel(requestId) {
+      try {
+        const res = await fetch('/db-export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId }),
+        });
+        const json = await res.json();
+        if (!res.ok) { alert(json.error || '내보내기 실패'); return; }
+        if (!json.data || json.data.length === 0) { alert('다운로드할 데이터가 없습니다.'); return; }
+
+        // 중첩 객체·배열은 JSON 문자열로 평탄화
+        const rows = json.data.map(doc => {
+          const flat = {};
+          for (const [k, v] of Object.entries(doc)) {
+            flat[k] = (v !== null && typeof v === 'object') ? JSON.stringify(v) : v;
+          }
+          return flat;
+        });
+
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '조회결과');
+        const ts = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+        const collectionName = json.collection || '조회결과';
+        XLSX.writeFile(wb, `${collectionName}_${ts}.xlsx`);
+      } catch (e) {
+        alert('엑셀 내보내기 중 오류가 발생했습니다.');
+      }
+    }
+
+    // ── 셀 포맷터 (columns[i].type 기반) ─────────────────────────────────────
+    function fmtOid(v) {
+      const s = typeof v === 'string' ? v : (v && v.$oid) || String(v);
+      const short = s;
+      return `<span class="cell-oid" title="${escapeHtml(s)}">${escapeHtml(short)}</span>`;
+    }
+
+    function fmtDate(v) {
+      let d;
+      if (v == null) return `<span class="cell-null">—</span>`;
+      if (typeof v === 'number') d = new Date(v);
+      else if (typeof v === 'string') d = new Date(v);
+      else if (v.$date) d = new Date(typeof v.$date === 'string' ? v.$date : Number(v.$date.$numberLong));
+      else return escapeHtml(String(v));
+      if (isNaN(d.getTime())) return escapeHtml(String(v));
+      const parts = new Intl.DateTimeFormat('ko-KR', {
+        timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      }).formatToParts(d);
+      const get = (t) => parts.find(p => p.type === t)?.value ?? '';
+      return `<span class="cell-mono">${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}</span>`;
+    }
+
+    // *Ts / *_ts / *_at 필드는 스키마 상 number 로 저장되지만 unix ms 타임스탬프이므로 date 로 렌더.
+    function isTimestampKey(key) {
+      if (!key) return false;
+      const leaf = key.includes('.') ? key.split('.').pop() : key;
+      return /(Ts|_ts|_at)$/i.test(leaf);
+    }
+
+    function looksLikeUnixMs(v) {
+      const n = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(n) && n >= 1e12 && n < 4e13;
+    }
+
+    function fmtDecimal(v) {
+      if (v == null) return `<span class="cell-null">—</span>`;
+      const raw = typeof v === 'object' && v.$numberDecimal ? v.$numberDecimal : String(v);
+      const num = Number(raw);
+      if (isNaN(num)) return escapeHtml(raw);
+      return `<span class="cell-mono">${num.toLocaleString('ko-KR')}</span>`;
+    }
+
+    function fmtBool(v) {
+      if (v === true || v === 1) return `<span class="cell-bool-t">✓</span>`;
+      if (v === false || v === 0) return `<span class="cell-bool-f">✗</span>`;
+      return `<span class="cell-null">—</span>`;
+    }
+
+    function fmtNested(v, kind) {
+      if (v == null) return `<span class="cell-null">—</span>`;
+      const label = kind === 'array'
+        ? `▶ ${Array.isArray(v) ? v.length : 0}개 항목`
+        : `▶ {...}`;
+      const json = JSON.stringify(v, null, 2);
+      const id = 'nj-' + Math.random().toString(36).slice(2, 9);
+      return `<button type="button" class="cell-nested" data-target="${id}">${label}</button>`
+        + `<div class="nested-json" id="${id}">${escapeHtml(json)}</div>`;
+    }
+
+    // MySQL 타입 문자열은 소문자 · 크기 접미사 포함 (varchar(45) · int(11) · datetime(6) 등).
+    // 타입 접두사로 판정.
+    function renderCell(value, type, key) {
+      if (value === null || value === undefined) return `<span class="cell-null">—</span>`;
+      // 타임스탬프 힌트: schema type=number 지만 이름이 *Ts/*_at 이고 값이 unix ms 형태면 date
+      if (isTimestampKey(key) && looksLikeUnixMs(value)) return fmtDate(value);
+      const t = (type || 'unknown').toLowerCase();
+      if (t.startsWith('date') || t.startsWith('timestamp') || t.startsWith('time')) return fmtDate(value);
+      if (t.startsWith('decimal') || t.startsWith('numeric')) return fmtDecimal(value);
+      if (t.startsWith('boolean') || t === 'bit' || t === 'tinyint(1)') return fmtBool(value);
+      if (t === 'json' || (typeof value === 'object' && value !== null)) return fmtNested(value, Array.isArray(value) ? 'array' : 'object');
+      if (t.startsWith('int') || t.startsWith('bigint') || t.startsWith('smallint') || t.startsWith('mediumint') || t.startsWith('tinyint') || t.startsWith('float') || t.startsWith('double')) return `<span class="cell-mono">${escapeHtml(String(value))}</span>`;
+      return escapeHtml(String(value));
+    }
+
+    function getNestedValue(obj, key) {
+      if (!key.includes('.')) return obj[key];
+      let cur = obj;
+      for (const p of key.split('.')) {
+        if (cur == null) return undefined;
+        cur = cur[p];
+      }
+      return cur;
+    }
+
+    function renderResultData(bubble, payload, requestId) {
+      const divider = document.createElement('hr');
+      divider.className = 'result-divider';
+      bubble.appendChild(divider);
+
+      const container = document.createElement('div');
+      container.className = 'result-data';
+
+      // 상단 배지
+      const badges = document.createElement('div');
+      badges.className = 'result-badges';
+      const countBadge = document.createElement('span');
+      countBadge.className = 'badge';
+      countBadge.textContent = `총 ${payload.count}건`;
+      badges.appendChild(countBadge);
+      if (typeof payload.dbTimeMs === 'number') {
+        const t = document.createElement('span');
+        t.className = 'badge';
+        t.textContent = `DB ${(payload.dbTimeMs / 1000).toFixed(2)}s`;
+        badges.appendChild(t);
+      }
+      if (payload.columnConfidence === 'partial') {
+        const p = document.createElement('span');
+        p.className = 'badge partial';
+        const n = (payload.unmappedKeys || []).length;
+        p.textContent = `일부 컬럼은 자동 매핑되지 않았습니다${n ? ` (${n}개)` : ''}`;
+        badges.appendChild(p);
+      }
+      container.appendChild(badges);
+
+      // 데이터 없음
+      if (!payload.data || payload.data.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-card';
+        empty.textContent = payload.message || '조회된 데이터가 없습니다.';
+        container.appendChild(empty);
+        bubble.appendChild(container);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+        return;
+      }
+
+      // 테이블
+      const wrap = document.createElement('div');
+      wrap.className = 'result-table-wrap';
+      const table = document.createElement('table');
+      table.className = 'result-table';
+
+      const thead = document.createElement('thead');
+      const trh = document.createElement('tr');
+      const cols = payload.columns || [];
+      for (const col of cols) {
+        const th = document.createElement('th');
+        if (col.source == null) th.classList.add('unmapped');
+        th.title = `${col.key} · ${col.type}${col.source ? ` · ${col.source}` : ''}`;
+        const label = document.createElement('span');
+        label.textContent = col.label || col.key;
+        const key = document.createElement('span');
+        key.className = 'th-key';
+        key.textContent = col.key;
+        th.appendChild(label);
+        th.appendChild(key);
+        trh.appendChild(th);
+      }
+      thead.appendChild(trh);
+      table.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+      for (const row of payload.data) {
+        const tr = document.createElement('tr');
+        for (const col of cols) {
+          const td = document.createElement('td');
+          const val = getNestedValue(row, col.key);
+          td.innerHTML = renderCell(val, col.type, col.key);
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      container.appendChild(wrap);
+
+      // nested JSON 토글
+      container.addEventListener('click', (e) => {
+        const btn = e.target.closest('.cell-nested');
+        if (!btn) return;
+        const el = container.querySelector(`#${btn.dataset.target}`);
+        if (el) el.classList.toggle('open');
+      });
+
+      bubble.appendChild(container);
+
+      // 복사·엑셀 버튼 — rows 를 그대로 복사(JSON)
+      const copyText = JSON.stringify(payload.data, null, 2);
+      addResultActions(bubble, copyText, requestId);
+
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function addResultActions(parentEl, text, requestId) {
+      const actions = document.createElement('div');
+      actions.className = 'result-actions';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'action-btn';
+      copyBtn.innerHTML = `${SVG_COPY} 복사`;
+      copyBtn.onclick = async () => {
+        await navigator.clipboard.writeText(text);
+        copyBtn.innerHTML = `${SVG_CHECK} 복사됨`;
+        copyBtn.classList.add('copied');
+        setTimeout(() => { copyBtn.innerHTML = `${SVG_COPY} 복사`; copyBtn.classList.remove('copied'); }, 1500);
+      };
+
+      const dlBtn = document.createElement('button');
+      dlBtn.className = 'action-btn';
+      dlBtn.innerHTML = `${SVG_DOWNLOAD} 엑셀`;
+      dlBtn.onclick = () => exportToExcel(requestId);
+
+      actions.appendChild(copyBtn);
+      actions.appendChild(dlBtn);
+      parentEl.appendChild(actions);
+    }
+
+    stopBtn.addEventListener('click', async () => {
+      if (!currentRequestId) return;
+      await fetch('/chat/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId: currentRequestId }),
+      });
+    });
+
+    function appendBubble(role, html, isLoading = false) {
+      const wrapper = document.createElement('div');
+      wrapper.className = `msg-wrapper ${role}`;
+
+      const div = document.createElement('div');
+      div.className = `bubble ${role}${isLoading ? ' loading' : ''}`;
+      div.innerHTML = html;
+
+      const time = document.createElement('div');
+      time.className = 'bubble-time';
+      time.textContent = new Date().toTimeString().slice(0, 8);
+
+      wrapper.appendChild(div);
+      wrapper.appendChild(time);
+      chatWindow.appendChild(wrapper);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+      return div;
+    }
+
+    function escapeHtml(text) {
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function formatResponse(text) {
+      return escapeHtml(text).replace(/\n/g, '<br>');
+    }
+
+    async function sendMessage() {
+      const message = userInput.value.trim();
+      if (!message) return;
+
+      const limitSelect = document.getElementById('limit-select');
+      const limitCustom = document.getElementById('limit-custom');
+      const limit = limitSelect.value === 'custom'
+        ? (parseInt(limitCustom.value, 10) || 20)
+        : parseInt(limitSelect.value, 10);
+
+      userInput.value = '';
+      userInput.style.height = 'auto';
+      sendBtn.disabled = true;
+      stopBtn.style.display = 'block';
+      currentRequestId = crypto.randomUUID();
+
+      appendBubble('user', escapeHtml(message));
+
+      const assistantWrapper = document.createElement('div');
+      assistantWrapper.className = 'msg-wrapper assistant';
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble assistant progress';
+
+      const assistantTime = document.createElement('div');
+      assistantTime.className = 'bubble-time';
+
+      assistantWrapper.appendChild(bubble);
+      assistantWrapper.appendChild(assistantTime);
+      chatWindow.appendChild(assistantWrapper);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+
+      let currentStep = null;
+      let resultRendered = false;
+
+      function nowHMS() {
+        return new Date().toTimeString().slice(0, 8);
+      }
+
+      function addStep(text) {
+        if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
+
+        currentStep = document.createElement('div');
+        currentStep.className = 'progress-step';
+
+        const spinner = document.createElement('span');
+        spinner.className = 'spinner';
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'step-time';
+        timeSpan.textContent = nowHMS();
+        const textSpan = document.createElement('span');
+
+        currentStep.appendChild(spinner);
+        currentStep.appendChild(timeSpan);
+        currentStep.appendChild(textSpan);
+        bubble.appendChild(currentStep);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+        typewriter(textSpan, text);
+      }
+
+      function addLog(text) {
+        const log = document.createElement('div');
+        log.className = 'progress-log';
+        bubble.appendChild(log);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+        typewriter(log, text);
+      }
+
+      addStep('준비 중...');
+
+      try {
+        const response = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message, requestId: currentRequestId, limit }),
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop();
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6);
+            if (raw === '[DONE]') break;
+
+            try {
+              const event = JSON.parse(raw);
+              if (event.type === 'progress') {
+                addStep(event.message);
+              } else if (event.type === 'log') {
+                addLog(event.message);
+              } else if (event.type === 'query') {
+                // 구조화된 query 이벤트 — 상세 로그는 이미 별도 'log' 이벤트로 표시됨 (backward compat).
+                // 여기서는 추가 렌더 없음. 필요 시 상단 배지 등 확장.
+              } else if (event.type === 'result-data') {
+                if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
+                assistantTime.textContent = nowHMS();
+                renderResultData(bubble, event.data, currentRequestId);
+                resultRendered = true;
+              } else if (event.type === 'result') {
+                // result-data 로 이미 렌더했거나 LLM 이 아무 텍스트도 안 만들었으면 스킵.
+                const resultText = event.message ?? '';
+                if (resultRendered || !resultText.trim()) {
+                  if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
+                  assistantTime.textContent = nowHMS();
+                  continue;
+                }
+                if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
+                const d1 = document.createElement('hr'); d1.className = 'result-divider'; bubble.appendChild(d1);
+                const r1 = document.createElement('div'); r1.className = 'result-text'; bubble.appendChild(r1);
+                assistantTime.textContent = nowHMS();
+                const capturedRequestId = currentRequestId;
+                const truncated = resultText.length > 3000;
+                const displayText = truncated ? resultText.slice(0, 3000) + '\n...' : resultText;
+                await typewriter(r1, displayText);
+                if (truncated) {
+                  const notice = document.createElement('div');
+                  notice.className = 'truncate-notice';
+                  notice.innerHTML = `${SVG_DOWNLOAD} 결과가 길어 일부만 표시됩니다. 전체 내용은 아래 엑셀 다운로드를 이용해주세요.`;
+                  bubble.appendChild(notice);
+                }
+                addResultActions(bubble, resultText, capturedRequestId);
+              } else if (event.type === 'cancelled') {
+                if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
+                const d2 = document.createElement('hr'); d2.className = 'result-divider'; bubble.appendChild(d2);
+                const r2 = document.createElement('div'); r2.className = 'result-text'; r2.textContent = event.message; bubble.appendChild(r2);
+                assistantTime.textContent = nowHMS();
+              } else if (event.type === 'error') {
+                if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
+                const d3 = document.createElement('hr'); d3.className = 'result-divider'; bubble.appendChild(d3);
+                const r3 = document.createElement('div'); r3.className = 'result-text'; r3.textContent = event.message; bubble.appendChild(r3);
+                assistantTime.textContent = nowHMS();
+              }
+              chatWindow.scrollTop = chatWindow.scrollHeight;
+            } catch (_) {}
+          }
+        }
+      } catch (e) {
+        if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
+        const de = document.createElement('hr'); de.className = 'result-divider'; bubble.appendChild(de);
+        const re = document.createElement('div'); re.className = 'result-text'; re.textContent = '서버와 통신 중 오류가 발생했습니다.'; bubble.appendChild(re);
+        assistantTime.textContent = nowHMS();
+      } finally {
+        sendBtn.disabled = false;
+        stopBtn.style.display = 'none';
+        currentRequestId = null;
+        userInput.focus();
+      }
+    }
+
+    fetch('/meta').then(r => r.json()).then(data => {
+      if (data.updatedAt) {
+        document.getElementById('updated-at').textContent = '최종 업데이트: ' + data.updatedAt;
+      }
+    });
+
+    document.getElementById('limit-select').addEventListener('change', (e) => {
+      const customInput = document.getElementById('limit-custom');
+      customInput.style.display = e.target.value === 'custom' ? '' : 'none';
+      if (e.target.value === 'custom') customInput.focus();
+    });
+
+    sendBtn.addEventListener('click', sendMessage);
+
+    userInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    userInput.addEventListener('input', () => {
+      userInput.style.height = 'auto';
+      userInput.style.height = Math.min(userInput.scrollHeight, 120) + 'px';
+    });
+  </script>
+</body>
+</html>

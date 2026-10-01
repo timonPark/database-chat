@@ -2,7 +2,7 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { cp, mkdir, rename, readFile, writeFile } from 'fs/promises';
-import { existsSync, readFileSync, writeFileSync, chmodSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, chmodSync, copyFileSync } from 'fs';
 import { execSync, spawnSync } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,6 +11,27 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = path.join(__dirname, '..', 'templates');
 const DOCKER_DIR   = path.join(__dirname, '..', 'docker');
 const SEEDS_DIR    = path.join(__dirname, '..', 'seeds');
+
+const IS_WINDOWS = process.platform === 'win32';
+// 안내 문구용 .env 복사 명령 — `copy` 는 cmd.exe·PowerShell 양쪽에서 동작
+const ENV_COPY_CMD = IS_WINDOWS ? 'copy .env.example .env' : 'cp .env.example .env';
+
+/**
+ * 크로스플랫폼 spawnSync.
+ * Why: Windows 에서 npm/pnpm/yarn/claude(npm 설치) 등은 .cmd 래퍼라 shell 없이 실행하면
+ * ENOENT/EINVAL 로 실패한다. 반대로 shell:true 에 args 배열을 넘기면 DEP0190 경고가 난다.
+ * 그래서 Windows 에서는 명령 문자열을 직접 조립해 shell 로 실행한다.
+ * (args 에 개행이 들어가는 긴 프롬프트에는 사용하지 말 것 — cmd.exe 인용 규칙상 깨진다)
+ */
+function run(
+  cmd: string,
+  args: string[],
+  opts: Parameters<typeof spawnSync>[2] = {},
+): ReturnType<typeof spawnSync> {
+  if (!IS_WINDOWS) return spawnSync(cmd, args, opts);
+  const quote = (a: string) => (/^[\w\-.\/\\:=@]+$/.test(a) ? a : `"${a.replace(/"/g, '""')}"`);
+  return spawnSync([cmd, ...args].map(quote).join(' '), { ...opts, shell: true });
+}
 
 // ── 선택지 정의 ─────────────────────────────────────────────────────────────
 
@@ -244,24 +265,52 @@ async function addSeedScript(targetDir: string): Promise<void> {
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 }
 
-async function generateSchemaScript(targetDir: string, database: string, provider: string): Promise<void> {
+/**
+ * 템플릿에 Node 기반 스키마 생성 스크립트(scripts/generate-schema.ts)가 포함돼 있는지 확인.
+ * Why (docs/windows-platform-spec.md §5): Windows 템플릿은 bash 대신 generate-schema.ts 를 쓴다.
+ * 이 파일이 있으면 generate-schema.sh 생성과 package.json schema 스크립트 덮어쓰기를 건너뛰어야 한다.
+ * (건너뛰지 않으면 "schema": "bash scripts/generate-schema.sh" 로 덮여 Windows 에서 WSL bash 오류 발생)
+ */
+/**
+ * seeds 의 공용 스크립트를 프로젝트로 복사. keepExisting 이면 템플릿이 이미 제공한 파일은 보존한다.
+ * Why: Windows template 은 resolveClaudeBin()·stdin 프롬프트 전달 등 Windows 대응이 들어간
+ * 자체 버전(generate-erd.ts, generate-index.ts 등)을 갖고 있다. seeds 의 Mac 버전으로 덮어쓰면
+ * `spawnSync claude ENOENT` 가 재발한다 (windows-platform-spec §1·§2).
+ */
+async function copySeedFile(src: string, dest: string, keepExisting: boolean): Promise<void> {
+  if (keepExisting && existsSync(dest)) return;
+  await cp(src, dest);
+}
+
+function hasNodeSchemaScript(targetDir: string): boolean {
+  return existsSync(path.join(targetDir, 'scripts', 'generate-schema.ts'));
+}
+
+async function generateSchemaScript(
+  targetDir: string,
+  database: string,
+  provider: string,
+  opts: { skipBash?: boolean; keepExisting?: boolean } = {},
+): Promise<void> {
   const promptSrc    = path.join(SEEDS_DIR, database, `generate-schema-prompt.${provider}.md`);
   const extractSrc   = path.join(SEEDS_DIR, database, 'extract-schema.ts');
   if (!existsSync(promptSrc) || !existsSync(extractSrc)) return;
 
   const scriptsDir = path.join(targetDir, 'scripts');
   await mkdir(scriptsDir, { recursive: true });
-  await cp(promptSrc,  path.join(scriptsDir, 'generate-schema-prompt.md'));
-  await cp(extractSrc, path.join(scriptsDir, 'extract-schema.ts'));
+  const keep = !!opts.keepExisting;
+  await copySeedFile(promptSrc,  path.join(scriptsDir, 'generate-schema-prompt.md'), keep);
+  await copySeedFile(extractSrc, path.join(scriptsDir, 'extract-schema.ts'), keep);
 
   // MongoDB: index.md / collection-mapping.md 를 deterministic 하게 조립하는 스크립트
   if (database === 'mongodb') {
     const indexGenSrc = path.join(SEEDS_DIR, database, 'generate-index.ts');
     if (existsSync(indexGenSrc)) {
-      await cp(indexGenSrc, path.join(scriptsDir, 'generate-index.ts'));
+      await copySeedFile(indexGenSrc, path.join(scriptsDir, 'generate-index.ts'), keep);
     }
   }
 
+  if (opts.skipBash) return;
   const sh = buildGenerateSchemaSh(database, provider);
   await writeFile(path.join(scriptsDir, 'generate-schema.sh'), sh, { mode: 0o755 });
 }
@@ -1025,12 +1074,16 @@ async function addSchemaToPackageScripts(targetDir: string): Promise<void> {
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 }
 
-async function generateErdScript(targetDir: string, database: string): Promise<void> {
+async function generateErdScript(
+  targetDir: string,
+  database: string,
+  opts: { keepExisting?: boolean } = {},
+): Promise<void> {
   const erdSrc = path.join(SEEDS_DIR, database, 'generate-erd.ts');
   if (!existsSync(erdSrc)) return;
   const scriptsDir = path.join(targetDir, 'scripts');
   await mkdir(scriptsDir, { recursive: true });
-  await cp(erdSrc, path.join(scriptsDir, 'generate-erd.ts'));
+  await copySeedFile(erdSrc, path.join(scriptsDir, 'generate-erd.ts'), !!opts.keepExisting);
 }
 
 async function addErdToPackageScripts(targetDir: string): Promise<void> {
@@ -1671,7 +1724,7 @@ async function runAutoSetup(
     steps.push({
       label: 'Docker 컨테이너 기동',
       fn: () => {
-        const result = spawnSync('docker', ['compose', '-f', 'docker/docker-compose.yml', 'up', '-d'],
+        const result = run('docker', ['compose', '-f', 'docker/docker-compose.yml', 'up', '-d'],
           { cwd: targetDir, stdio: 'inherit' });
         if (result.status !== 0) {
           throw new Error('Docker 컨테이너 기동 실패');
@@ -1691,7 +1744,7 @@ async function runAutoSetup(
             ?? (existsSync('/Applications/ChatGPT.app/Contents/Resources/codex')
               ? '/Applications/ChatGPT.app/Contents/Resources/codex'
               : 'codex');
-        const result = spawnSync(command, ['--version'], { cwd: targetDir, stdio: 'inherit' });
+        const result = run(command, ['--version'], { cwd: targetDir, stdio: ['ignore', 'inherit', 'inherit'] });
         if (result.status !== 0) {
           throw new Error(`${provider === 'claude' ? 'Claude' : 'Codex'} CLI를 찾을 수 없습니다.`);
         }
@@ -1705,7 +1758,8 @@ async function runAutoSetup(
     fn: () => {
       const envPath = path.join(targetDir, '.env');
       if (!existsSync(envPath)) {
-        execSync('cp .env.example .env', { cwd: targetDir, stdio: 'ignore' });
+        // 셸 명령(cp) 대신 Node API 사용 — Windows cmd.exe 에는 cp 가 없어 실패했음
+        copyFileSync(path.join(targetDir, '.env.example'), envPath);
       }
       // docker-compose.yml에서 실제 DB 접속 정보를 읽어 .env에 반영
       if (dbMode === 'docker') {
@@ -1758,7 +1812,7 @@ async function runAutoSetup(
       steps.push({
         label: '샘플 데이터 마이그레이션 (seed.sh)',
         fn: () => {
-          const result = spawnSync(pm, ['run', 'seed'], { cwd: targetDir, stdio: 'inherit' });
+          const result = run(pm, ['run', 'seed'], { cwd: targetDir, stdio: 'inherit' });
           if (result.status !== 0) {
             throw new Error('샘플 데이터 마이그레이션 실패');
           }
@@ -1770,7 +1824,7 @@ async function runAutoSetup(
     steps.push({
       label: 'DB 스키마 인덱스 생성 (schema)',
       fn: () => {
-        const result = spawnSync(pm, ['run', 'schema'], { cwd: targetDir, stdio: 'inherit' });
+        const result = run(pm, ['run', 'schema'], { cwd: targetDir, stdio: 'inherit' });
         if (result.status !== 0) {
           throw new Error('DB 스키마 인덱스 생성 실패');
         }
@@ -1782,7 +1836,7 @@ async function runAutoSetup(
     steps.push({
       label: 'ERD 다이어그램 생성 (erd)',
       fn: () => {
-        const result = spawnSync(pm, ['run', 'erd'], { cwd: targetDir, stdio: 'inherit' });
+        const result = run(pm, ['run', 'erd'], { cwd: targetDir, stdio: 'inherit' });
         if (result.status !== 0) {
           throw new Error('ERD 생성 실패 (스키마 문서/카탈로그 조회 문제 가능성)');
         }
@@ -2057,6 +2111,13 @@ async function main(): Promise<void> {
   // package.json의 name 필드를 프로젝트명으로 교체
   await updatePackageName(targetDir, projectName);
 
+  // Windows 전용 template 은 Windows 실기 검증을 거친 완성본이다. 템플릿이 이미 제공하는 파일
+  // (README.md · install.bat · start.bat · scripts/*.ts) 을 스캐폴더가 Mac 기준 결과물로 덮어쓰면
+  // 검증된 Windows 대응이 사라진다 → Windows template 사용 시 템플릿 파일은 보존한다.
+  // (mac fallback 으로 떨어진 경우와 Mac 은 기존 동작 유지)
+  const isWindowsTemplate = templateDir === path.join(TEMPLATES_DIR, 'windows', combo);
+  const templateHas = (file: string) => isWindowsTemplate && existsSync(path.join(targetDir, file));
+
   // Docker 모드: DB에 맞는 docker-compose.yml 생성 (템플릿 파일 덮어쓰기)
   if (dbMode === 'docker') {
     await generateDockerCompose(targetDir, database, projectName);
@@ -2068,22 +2129,33 @@ async function main(): Promise<void> {
     await addSeedScript(targetDir);
   }
 
-  // generate-schema.ts 복사 + package.json에 schema 스크립트 추가
-  await generateSchemaScript(targetDir, database, provider);
-  await addSchemaToPackageScripts(targetDir);
+  // 스키마 생성 스크립트 — extract-schema.ts / generate-index.ts 등 공용 파일은 항상 복사.
+  // 템플릿에 generate-schema.ts(Node 구현)가 있으면 bash 기반 generate-schema.sh 생성과
+  // package.json schema 덮어쓰기는 건너뛴다 (windows-platform-spec §5)
+  const useNodeSchema = hasNodeSchemaScript(targetDir);
+  await generateSchemaScript(targetDir, database, provider, { skipBash: useNodeSchema, keepExisting: isWindowsTemplate });
+  if (!useNodeSchema) {
+    await addSchemaToPackageScripts(targetDir);
+  }
 
   // generate-erd.ts 복사 + package.json에 erd 스크립트 추가
-  await generateErdScript(targetDir, database);
+  await generateErdScript(targetDir, database, { keepExisting: isWindowsTemplate });
   await addErdToPackageScripts(targetDir);
 
   // README.md 생성
-  await generateReadme(targetDir, projectName, provider, database, dbMode, withSeed, pm, true);
+  if (!templateHas('README.md')) {
+    await generateReadme(targetDir, projectName, provider, database, dbMode, withSeed, pm, true);
+  }
 
   // install 스크립트 생성 (install.sh / install.bat)
-  await generateInstallScripts(targetDir, projectName, provider, database, dbMode);
+  if (!templateHas('install.bat')) {
+    await generateInstallScripts(targetDir, projectName, provider, database, dbMode);
+  }
 
   // start 스크립트 생성 (start.sh / start.bat)
-  await generateStartScripts(targetDir, projectName);
+  if (!templateHas('start.bat')) {
+    await generateStartScripts(targetDir, projectName);
+  }
 
   spinner.stop('Template files copied.');
 
@@ -2114,7 +2186,7 @@ async function main(): Promise<void> {
     ...(withSeed
       ? [`${pm} run seed   # 샘플 데이터 마이그레이션 (DB 기동 후 실행)`]
       : []),
-    'cp .env.example .env',
+    ENV_COPY_CMD,
     `${pm} run schema   # DB 스키마 자동 추출 → index.md / ${database === 'mongodb' ? 'collection' : 'table'}-mapping.md 생성`,
     ...(dbMode === 'existing' ? ['# .env에 DB 접속 정보를 입력하세요'] : []),
     ...(withSeed ? ['# seed 완료 후 .env의 DB_DATABASE를 안내에 따라 변경하세요'] : []),

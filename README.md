@@ -37,7 +37,8 @@ The LLM never touches the database directly. It calls internal HTTP endpoints (`
 
 ### Requirements
 
-- **OS: macOS only** (Windows is **not supported yet — actively in development**)
+- **OS: macOS, Windows (with setup), Linux** 
+  - 🪟 **Windows users**: See [Windows Setup Guide](./WINDOWS_SETUP.md) for PowerShell execution policy and environment setup.
 - Node.js 18 or later
 - **Provider CLI pre-logged in with a subscription plan** — Claude Code (Claude), `codex` (ChatGPT), or `agy` (Antigravity). Run `claude login` / `codex login` / `agy login` **once** in the same shell/user account before starting the server. The Node.js server `spawn`s the CLI, which inherits your login session (`~/.claude/`, `~/.codex/`, `~/.antigravity/`) — no API key, no per-request token. Pay-per-use API keys are not used.
 - A database to connect to

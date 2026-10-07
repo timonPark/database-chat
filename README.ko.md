@@ -37,7 +37,8 @@ LLM은 직접 DB에 접근하지 않고 서버 내부 HTTP 엔드포인트(`/db-
 
 ### 요구사항
 
-- **OS: macOS 전용** (Windows 는 **현재 미지원 — 개발 진행 중**)
+- **OS: macOS, Windows (설정 필요), Linux**
+  - 🪟 **Windows 사용자**: [Windows 환경설정 가이드](./WINDOWS_SETUP.ko.md)를 참고하세요. (PowerShell 실행 정책 및 환경변수 설정)
 - Node.js 18 이상
 - **구독 플랜으로 사전 로그인된 provider CLI** — Claude Code (Claude), `codex` (ChatGPT), `agy` (Antigravity) 중 하나. 서버 실행 전에 동일 사용자 계정에서 `claude login` / `codex login` / `agy login` 을 **한 번** 실행해두면 됩니다. Node.js 서버가 CLI 를 `spawn` 할 때 사용자 홈의 로그인 세션 (`~/.claude/`, `~/.codex/`, `~/.antigravity/`) 을 자연스럽게 상속받아 동작하며, API 키·요청별 토큰은 필요하지 않습니다. 종량제 API 는 지원하지 않습니다.
 - 연결할 데이터베이스

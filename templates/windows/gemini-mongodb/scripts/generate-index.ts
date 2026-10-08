@@ -6,7 +6,7 @@
  * 1) Deterministic skeleton — collections/*.md 스캔해 정확한 컬렉션 목록/건수/주요
  *    필드를 뽑아 두 파일을 임시로 저장. LLM 호출이 실패해도 최소한 이 골격은
  *    남는다 (실제 DB 상태와 100% 일치).
- * 2) LLM enrichment — Claude CLI 에 skeleton + collections/*.md 를 넘겨 도메인
+ * 2) LLM enrichment — agy (Gemini) CLI 에 skeleton + collections/*.md 를 넘겨 도메인
  *    카테고리(이모지 + 한글), 컬렉션별 한국어 설명, 자연어 키워드를 채운 최종
  *    버전으로 덮어쓴다. 실패 시 skeleton 유지.
  *
@@ -27,22 +27,58 @@ const COLLECTIONS_DIR: string = path.resolve('collections');
 const INDEX_FILE: string = path.resolve('index.md');
 const MAPPING_FILE: string = path.resolve('collection-mapping.md');
 const DB_NAME: string = process.env.DB_DATABASE ?? '(DB_DATABASE 미지정)';
-const MODEL: string = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5-20251001';
+const MODEL: string = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash-medium';
+const PRINT_TIMEOUT: string = process.env.GEMINI_PRINT_TIMEOUT?.trim() || '5m';
+const INDEX_BEGIN: string = '<<<INDEX_MD>>>';
+const INDEX_END: string = '<<<END_INDEX_MD>>>';
+const MAPPING_BEGIN: string = '<<<MAPPING_MD>>>';
+const MAPPING_END: string = '<<<END_MAPPING_MD>>>';
 
-// Windows: npm 전역 설치 claude 는 .cmd shim 이라 shell:false 로 직접 실행 불가 (ENOENT).
-// shim 안의 claude.exe 상대 경로를 파싱해 절대 경로로 실행 (windows-platform-spec §1).
-function resolveClaudeBin(): string {
+// dotenv 로 읽은 DB 자격증명이 agy 자식 프로세스로 상속되지 않게 제거한다.
+const AGY_CHILD_ENV: NodeJS.ProcessEnv = (() => {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of ['DB_HOST', 'DB_PORT', 'DB_DATABASE', 'DB_USER_NAME', 'DB_USER_PASSWORD']) delete env[key];
+  return env;
+})();
+
+// Windows: agy 는 .cmd 래퍼로 설치되며 shell:false 로는 .cmd 를 실행할 수 없다 (ENOENT).
+// 래퍼 안의 agy.exe 경로를 환경변수까지 풀어 절대 경로로 실행한다. 래퍼 형식은 설치 방식마다 다르다:
+//   자체 설치 (WindowsApps\agy.cmd) : @"%LOCALAPPDATA%\agy\bin\agy.exe" %*
+//   npm 전역 설치                    : "%dp0%\node_modules\...\agy.exe" %*
+function resolveAgyBin(): string {
+  const envPath = process.env.AGY_CLI_PATH?.trim();
+  if (envPath) {
+    try { execSync(`"${envPath}" --version`, { stdio: 'ignore' }); return envPath; } catch { /* fallback */ }
+  }
   try {
-    const shims = execSync('where claude.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    const shims = execSync('where agy.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .trim().split(/\r?\n/);
     for (const shim of shims) {
-      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+claude\.exe)/i);
+      const shimDir = path.dirname(shim.trim());
+      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/"?([^"\r\n]*?agy\.exe)"?/i);
       if (!m) continue;
-      const resolved = path.resolve(path.dirname(shim.trim()), m[1]);
+      const exePath = m[1]
+        .replace(/^@/, '')
+        .replace(/%~dp0|%dp0%/gi, `${shimDir}\\`)
+        .replace(/%([^%]+)%/g, (whole: string, name: string) => process.env[name] ?? whole);
+      const resolved = path.resolve(shimDir, exePath);
       if (fs.existsSync(resolved)) return resolved;
     }
   } catch { /* fallback */ }
-  return 'claude';
+  return 'agy';
+}
+
+// 응답 텍스트에서 begin/end 표시 사이의 내용을 꺼낸다. 모델이 ```markdown 펜스로 감싸도 벗겨낸다.
+function extractSection(text: string, begin: string, end: string): string | null {
+  const start = text.indexOf(begin);
+  if (start === -1) return null;
+  const stop = text.indexOf(end, start + begin.length);
+  if (stop === -1) return null;
+  const body = text.slice(start + begin.length, stop).trim()
+    .replace(/^```(?:markdown|md)?\s*\n/i, '')
+    .replace(/\n```\s*$/, '')
+    .trim();
+  return body.length > 0 ? `${body}\n` : null;
 }
 
 if (!fs.existsSync(COLLECTIONS_DIR)) {
@@ -157,7 +193,7 @@ writeSkeleton();
 console.error(`skeleton 저장 완료 (${collections.length}개 컬렉션)`);
 
 // ── 2단계: LLM enrichment ────────────────────────────────────────────────────
-// collections/*.md 원문을 프롬프트에 포함해 Claude 가 도메인 카테고리와 자연어
+// collections/*.md 원문을 프롬프트에 포함해 agy 가 도메인 카테고리와 자연어
 // 키워드, 한국어 설명을 채워 두 파일을 덮어쓴다.
 
 let collectionsBlock: string = '';
@@ -240,56 +276,69 @@ ${collectionsBlock}
 - 두 파일의 카테고리 그룹핑은 동일하게 유지
 - 카테고리 순서는 중요도/사용 빈도 순 권장
 
-## 저장
+## 출력 형식
 
-bash heredoc 으로 아래 **절대 경로** 두 파일을 순서대로 저장하세요.
-상대 경로나 다른 경로를 쓰지 마세요 (다른 위치에 쓰면 서버가 못 읽음).
+파일을 직접 만들지 말고, 두 파일의 전체 내용을 아래 표시 사이에 그대로 출력하세요.
+표시 줄은 정확히 그대로 쓰고, 표시 바깥에는 아무것도 쓰지 마세요.
 
-\`\`\`bash
-cat > '${INDEX_FILE}' <<'INDEX_EOF'
-... 여기에 index.md 내용 ...
-INDEX_EOF
-
-cat > '${MAPPING_FILE}' <<'MAPPING_EOF'
-... 여기에 collection-mapping.md 내용 ...
-MAPPING_EOF
-\`\`\`
-
-파일 저장 외의 응답(설명, 요약)은 최소화하세요.
+${INDEX_BEGIN}
+(index.md 전체 내용)
+${INDEX_END}
+${MAPPING_BEGIN}
+(collection-mapping.md 전체 내용)
+${MAPPING_END}
 `;
 
 const promptSize: number = prompt.length;
 console.error(`LLM enrichment 호출 (모델: ${MODEL}, 프롬프트 ${(promptSize / 1024).toFixed(1)}KB)...`);
 
-const result = spawnSync(resolveClaudeBin(), [
-  '-p',
+// agy 는 프롬프트를 -p 인자로 받는다 (generate-schema.ts 와 동일한 호출 방식).
+// 응답 텍스트를 이 프로세스가 파싱해 파일로 저장한다 — 모델이 셸 · 경로로 파일을 쓰지 않으므로
+// Windows 경로 · 인코딩 문제가 생기지 않는다.
+const result = spawnSync(resolveAgyBin(), [
+  '-p', prompt,
+  '--dangerously-skip-permissions',
+  '--output-format', 'text',
   '--model', MODEL,
-  '--allowedTools', 'Bash',
+  '--print-timeout', PRINT_TIMEOUT,
 ], {
-  // 프롬프트는 stdin 으로 전달 — 수십 KB 프롬프트를 인자로 넘기면 Windows 커맨드라인
-  // 길이 제한(ENAMETOOLONG)에 걸린다 (windows-platform-spec §2)
-  input: prompt,
   encoding: 'utf-8',
-  stdio: ['pipe', 'inherit', 'inherit'],
-  shell: false, // 인자 이스케이프 문제 방지 (windows-platform-spec §1)
+  env: AGY_CHILD_ENV,
+  shell: false,
   maxBuffer: 256 * 1024 * 1024,
 });
 
 if (result.error) {
-  console.error(`Claude CLI 실행 오류: ${result.error.message}`);
+  const reason = (result.error as NodeJS.ErrnoException).code === 'ENOENT'
+    ? 'agy CLI 를 찾을 수 없습니다 (install.bat 안내 참고)'
+    : result.error.message;
+  console.error(`agy CLI 실행 오류: ${reason}`);
   console.error('Skeleton 파일은 남아있습니다. 나중에 다시 실행하면 enrichment 재시도.');
   process.exit(0);
 }
 if (result.status !== 0) {
-  console.error(`Claude CLI 종료 코드 ${result.status}. Skeleton 유지.`);
+  console.error(`agy CLI 종료 코드 ${result.status}. Skeleton 유지.`);
+  console.error((result.stderr ?? '').slice(-2000));
   process.exit(0);
 }
 
-// 검증: enrichment 후 파일이 여전히 존재하고 skeleton 마커가 사라졌는지 확인
-if (!fs.existsSync(INDEX_FILE) || !fs.existsSync(MAPPING_FILE)) {
-  console.error('경고: enrichment 후 파일이 사라졌습니다. Skeleton 재생성.');
-  writeSkeleton();
-  process.exit(1);
+const output: string = (result.stdout ?? '').replace(/\r\n/g, '\n');
+const indexMd: string | null = extractSection(output, INDEX_BEGIN, INDEX_END);
+const mappingMd: string | null = extractSection(output, MAPPING_BEGIN, MAPPING_END);
+if (!indexMd || !mappingMd) {
+  console.error('agy 응답에서 index.md / collection-mapping.md 내용을 찾지 못했습니다. Skeleton 유지.');
+  console.error(`응답 앞부분: ${output.slice(0, 400)}`);
+  process.exit(0);
+}
+fs.writeFileSync(INDEX_FILE, indexMd, 'utf-8');
+fs.writeFileSync(MAPPING_FILE, mappingMd, 'utf-8');
+
+// 검증: 모든 컬렉션이 응답에 포함됐는지 확인 (누락 시 경고만 — 파일은 이미 enrichment 버전)
+const missing: string[] = collections
+  .map((c) => c.name)
+  .filter((name) => !indexMd.includes(`\`${name}\``) || !mappingMd.includes(`\`${name}\``));
+if (missing.length > 0) {
+  console.error(`경고: 응답에서 빠진 컬렉션 ${missing.length}개: ${missing.join(', ')}`);
 }
 
 const indexSize: number = fs.statSync(INDEX_FILE).size;

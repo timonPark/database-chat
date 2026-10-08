@@ -3,7 +3,7 @@
  * MongoDB ERD 생성 — LLM 기반.
  *
  * `index.md` (컬렉션 인덱스) 와 `collection-mapping.md` (자연어 매핑, 주요 필드)
- * 두 파일을 Claude CLI 에 넘겨 Mermaid ER 다이어그램을 생성한다.
+ * 두 파일을 agy (Gemini) CLI 에 넘겨 Mermaid ER 다이어그램을 생성한다.
  *
  * 이 접근의 이유:
  * - MongoDB 에는 FK 제약이 없어 관계는 도메인 지식으로 판단해야 한다.
@@ -23,22 +23,61 @@ const INDEX_FILE: string = path.resolve('index.md');
 const MAPPING_FILE: string = path.resolve('collection-mapping.md');
 const COLLECTIONS_DIR: string = path.resolve('collections');
 const OUTPUT_FILE: string = path.resolve('erd.mmd');
-const MODEL: string = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5-20251001';
+const MODEL: string = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash-medium';
+const PRINT_TIMEOUT: string = process.env.GEMINI_PRINT_TIMEOUT?.trim() || '5m';
+const ERD_BEGIN: string = '<<<ERD_MMD>>>';
+const ERD_END: string = '<<<END_ERD_MMD>>>';
 
-// Windows: npm 전역 설치 claude 는 .cmd shim 이라 shell:false 로 직접 실행 불가 (ENOENT).
-// shim 안의 claude.exe 상대 경로를 파싱해 절대 경로로 실행 (windows-platform-spec §1).
-function resolveClaudeBin(): string {
+// dotenv 로 읽은 DB 자격증명이 agy 자식 프로세스로 상속되지 않게 제거한다.
+const AGY_CHILD_ENV: NodeJS.ProcessEnv = (() => {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of ['DB_HOST', 'DB_PORT', 'DB_DATABASE', 'DB_USER_NAME', 'DB_USER_PASSWORD']) delete env[key];
+  return env;
+})();
+
+// Windows: agy 는 .cmd 래퍼로 설치되며 shell:false 로는 .cmd 를 실행할 수 없다 (ENOENT).
+// 래퍼 안의 agy.exe 경로를 환경변수까지 풀어 절대 경로로 실행한다. 래퍼 형식은 설치 방식마다 다르다:
+//   자체 설치 (WindowsApps\agy.cmd) : @"%LOCALAPPDATA%\agy\bin\agy.exe" %*
+//   npm 전역 설치                    : "%dp0%\node_modules\...\agy.exe" %*
+function resolveAgyBin(): string {
+  const envPath = process.env.AGY_CLI_PATH?.trim();
+  if (envPath) {
+    try { execSync(`"${envPath}" --version`, { stdio: 'ignore' }); return envPath; } catch { /* fallback */ }
+  }
   try {
-    const shims = execSync('where claude.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    const shims = execSync('where agy.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .trim().split(/\r?\n/);
     for (const shim of shims) {
-      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+claude\.exe)/i);
+      const shimDir = path.dirname(shim.trim());
+      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/"?([^"\r\n]*?agy\.exe)"?/i);
       if (!m) continue;
-      const resolved = path.resolve(path.dirname(shim.trim()), m[1]);
+      const exePath = m[1]
+        .replace(/^@/, '')
+        .replace(/%~dp0|%dp0%/gi, `${shimDir}\\`)
+        .replace(/%([^%]+)%/g, (whole: string, name: string) => process.env[name] ?? whole);
+      const resolved = path.resolve(shimDir, exePath);
       if (fs.existsSync(resolved)) return resolved;
     }
   } catch { /* fallback */ }
-  return 'claude';
+  return 'agy';
+}
+
+// 응답에서 Mermaid 본문을 꺼낸다: 표시 사이 → ```mermaid 펜스 → erDiagram 으로 시작하는 줄 순서로 시도.
+function extractErd(text: string): string | null {
+  const start = text.indexOf(ERD_BEGIN);
+  const stop = start === -1 ? -1 : text.indexOf(ERD_END, start + ERD_BEGIN.length);
+  let body: string | null = start !== -1 && stop !== -1 ? text.slice(start + ERD_BEGIN.length, stop) : null;
+  if (body === null) {
+    const fence = text.match(/```mermaid\s*\n([\s\S]*?)\n```/i);
+    body = fence ? fence[1] : null;
+  }
+  if (body === null) {
+    const at = text.search(/^erDiagram\b/m);
+    body = at === -1 ? null : text.slice(at);
+  }
+  if (body === null) return null;
+  body = body.trim().replace(/^```(?:mermaid)?\s*\n/i, '').replace(/\n```\s*$/, '').trim();
+  return body.startsWith('erDiagram') ? `${body}\n` : null;
 }
 
 if (!fs.existsSync(INDEX_FILE) || !fs.existsSync(MAPPING_FILE)) {
@@ -69,8 +108,7 @@ for (const f of collectionFiles) {
 }
 
 const prompt: string = `아래는 MongoDB 데이터베이스의 컬렉션 인덱스, 자연어 매핑, 그리고 각 컬렉션의 상세 필드 문서입니다.
-이 문서들을 근거로 Mermaid ER 다이어그램을 만들어 현재 디렉토리의 \`erd.mmd\` 파일로 저장하세요.
-저장은 반드시 bash heredoc 을 사용하세요 (설명이나 다른 도구 사용 금지).
+이 문서들을 근거로 Mermaid ER 다이어그램(erd.mmd 내용)을 만들어 출력하세요.
 
 ## index.md
 \`\`\`markdown
@@ -125,53 +163,55 @@ ${collectionsBlock}
 **도메인적 근접**(같은 카테고리이지만 조인 키 없음)은 절대 관계로 그리지 마세요.
 확실하지 않으면 관계선을 생략하세요 — false positive 방지가 우선.
 
-## 작성 방식
+## 출력 형식
 
-bash heredoc 으로 아래 **절대 경로** 에 저장하세요. 상대 경로나 다른 경로 금지.
+파일을 직접 만들지 말고, erd.mmd 전체 내용을 아래 표시 사이에 그대로 출력하세요.
+표시 줄은 정확히 그대로 쓰고, 표시 바깥에는 아무것도 쓰지 마세요 (요약 · 설명 · 관계 목록 금지).
 
-\`\`\`bash
-cat > '${OUTPUT_FILE}' <<'ERD_EOF'
+${ERD_BEGIN}
 erDiagram
   ...
-ERD_EOF
-\`\`\`
-
-파일 저장 외의 응답(요약, 설명, 관계 목록 등)은 최소화하세요.
+${ERD_END}
 `;
 
-console.error(`Claude CLI 호출 (모델: ${MODEL})... 인덱스 ${(indexContent.length / 1024).toFixed(1)}KB + 매핑 ${(mappingContent.length / 1024).toFixed(1)}KB + 컬렉션 상세 ${(collectionsBlock.length / 1024).toFixed(1)}KB`);
+console.error(`agy CLI 호출 (모델: ${MODEL})... 인덱스 ${(indexContent.length / 1024).toFixed(1)}KB + 매핑 ${(mappingContent.length / 1024).toFixed(1)}KB + 컬렉션 상세 ${(collectionsBlock.length / 1024).toFixed(1)}KB`);
 
-// generate-schema.sh 와 동일한 패턴: Bash 툴만 허용해 Claude 가 heredoc 으로
-// 직접 파일을 쓴다. stdout 은 요약 텍스트가 나오지만 무시한다 — 우리는
-// 파일 존재 여부와 첫 줄이 erDiagram 인지만 확인한다.
-const result = spawnSync(resolveClaudeBin(), [
-  '-p',
+// agy 는 프롬프트를 -p 인자로 받는다 (generate-schema.ts 와 동일한 호출 방식).
+// 응답 텍스트를 이 프로세스가 파싱해 erd.mmd 로 저장한다 — 모델이 셸 · 경로로 파일을 쓰지 않으므로
+// Windows 경로 · 인코딩 문제가 생기지 않는다.
+const result = spawnSync(resolveAgyBin(), [
+  '-p', prompt,
+  '--dangerously-skip-permissions',
+  '--output-format', 'text',
   '--model', MODEL,
-  '--allowedTools', 'Bash',
+  '--print-timeout', PRINT_TIMEOUT,
 ], {
-  // 프롬프트는 stdin 으로 전달 — 수십 KB 프롬프트를 인자로 넘기면 Windows 커맨드라인
-  // 길이 제한(ENAMETOOLONG)에 걸린다 (windows-platform-spec §2)
-  input: prompt,
   encoding: 'utf-8',
-  stdio: ['pipe', 'inherit', 'inherit'],
-  shell: false, // 인자 이스케이프 문제 방지 (windows-platform-spec §1)
+  env: AGY_CHILD_ENV,
+  shell: false,
   maxBuffer: 256 * 1024 * 1024,
 });
 
 if (result.error) {
-  console.error(`Claude CLI 실행 오류: ${result.error.message}`);
-  console.error('claude CLI 가 PATH 에 있는지 확인하세요.');
+  const reason = (result.error as NodeJS.ErrnoException).code === 'ENOENT'
+    ? 'agy CLI 를 찾을 수 없습니다 (install.bat 안내 참고)'
+    : result.error.message;
+  console.error(`agy CLI 실행 오류: ${reason}`);
   process.exit(1);
 }
 if (result.status !== 0) {
-  console.error(`Claude CLI 종료 코드 ${result.status}`);
+  console.error(`agy CLI 종료 코드 ${result.status}`);
+  console.error((result.stderr ?? '').slice(-2000));
   process.exit(1);
 }
 
-if (!fs.existsSync(OUTPUT_FILE)) {
-  console.error(`erd.mmd 파일이 생성되지 않았습니다. Claude 응답을 확인하세요.`);
+const erd: string | null = extractErd((result.stdout ?? '').replace(/\r\n/g, '\n'));
+if (!erd) {
+  console.error('agy 응답에서 erDiagram 내용을 찾지 못했습니다. erd.mmd 는 변경하지 않았습니다.');
+  console.error(`응답 앞부분: ${(result.stdout ?? '').slice(0, 400)}`);
   process.exit(1);
 }
+fs.writeFileSync(OUTPUT_FILE, erd, 'utf-8');
 
 const saved: string = fs.readFileSync(OUTPUT_FILE, 'utf-8').trim();
 const firstLine: string = saved.split('\n')[0].trim();

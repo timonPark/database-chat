@@ -225,8 +225,10 @@ const ts: () => string = () => new Date().toTimeString().slice(0, 8);
 const DB_TIMEOUT_MS: number = 30_000;
 const DB_TIMEOUT_MSG: string = 'DB 응답시간 초과 Max 30초';
 
-// Windows: npm 전역 설치 agy 는 .cmd shim 이라 shell:false 로 직접 실행 불가 (ENOENT).
-// where agy.cmd 로 shim 위치를 찾고 내부의 agy.exe 상대경로를 파싱해 절대경로를 얻는다.
+// Windows: agy 는 .cmd 래퍼로 설치되며 shell:false 로는 .cmd 를 실행할 수 없다 (ENOENT).
+// 래퍼 안의 agy.exe 경로를 환경변수까지 풀어 절대 경로로 실행한다. 래퍼 형식은 설치 방식마다 다르다:
+//   자체 설치 (WindowsApps\agy.cmd) : @"%LOCALAPPDATA%\agy\bin\agy.exe" %*
+//   npm 전역 설치                    : "%dp0%\node_modules\...\agy.exe" %*
 function resolveAgyBin(): string {
   const envPath = process.env.AGY_CLI_PATH?.trim();
   if (envPath) {
@@ -236,9 +238,14 @@ function resolveAgyBin(): string {
     const shims = execSync('where agy.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .trim().split(/\r?\n/);
     for (const shim of shims) {
-      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+agy\.exe)/i);
+      const shimDir = path.dirname(shim.trim());
+      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/"?([^"\r\n]*?agy\.exe)"?/i);
       if (!m) continue;
-      const resolved = path.resolve(path.dirname(shim.trim()), m[1]);
+      const exePath = m[1]
+        .replace(/^@/, '')
+        .replace(/%~dp0|%dp0%/gi, `${shimDir}\\`)
+        .replace(/%([^%]+)%/g, (whole: string, name: string) => process.env[name] ?? whole);
+      const resolved = path.resolve(shimDir, exePath);
       if (fs.existsSync(resolved)) return resolved;
     }
   } catch { /* fallback */ }

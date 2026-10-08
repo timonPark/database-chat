@@ -32,7 +32,10 @@ const AGY_CHILD_ENV: NodeJS.ProcessEnv = (() => {
   return env;
 })();
 
-// Windows: npm 전역 설치 agy 는 .cmd shim 이라 shell:false 로 직접 실행 불가 (ENOENT).
+// Windows: agy 는 .cmd 래퍼로 설치되며 shell:false 로는 .cmd 를 실행할 수 없다 (ENOENT).
+// 래퍼 안의 agy.exe 경로를 환경변수까지 풀어 절대 경로로 실행한다. 래퍼 형식은 설치 방식마다 다르다:
+//   자체 설치 (WindowsApps\agy.cmd) : @"%LOCALAPPDATA%\agy\bin\agy.exe" %*
+//   npm 전역 설치                    : "%dp0%\node_modules\...\agy.exe" %*
 function resolveAgyBin(): string {
   const envPath = process.env.AGY_CLI_PATH?.trim();
   if (envPath) {
@@ -42,9 +45,14 @@ function resolveAgyBin(): string {
     const shims = execSync('where agy.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .trim().split(/\r?\n/);
     for (const shim of shims) {
-      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+agy\.exe)/i);
+      const shimDir = path.dirname(shim.trim());
+      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/"?([^"\r\n]*?agy\.exe)"?/i);
       if (!m) continue;
-      const resolved = path.resolve(path.dirname(shim.trim()), m[1]);
+      const exePath = m[1]
+        .replace(/^@/, '')
+        .replace(/%~dp0|%dp0%/gi, `${shimDir}\\`)
+        .replace(/%([^%]+)%/g, (whole: string, name: string) => process.env[name] ?? whole);
+      const resolved = path.resolve(shimDir, exePath);
       if (fs.existsSync(resolved)) return resolved;
     }
   } catch { /* fallback */ }
@@ -82,7 +90,11 @@ function nameOf(block: string[]): string {
 function fetchAgyModels(agyBin: string): string[] {
   try {
     const result = spawnSync(agyBin, ['models'], { encoding: 'utf-8', shell: false });
-    if (result.status !== 0) return [];
+    if (result.error || result.status !== 0) {
+      const reason = result.error ? ((result.error as NodeJS.ErrnoException).code ?? result.error.message) : `exit ${result.status}`;
+      console.log(`  ⚠  agy models 조회 실패 (${reason}) — 기본 모델만 표시합니다.`);
+      return [];
+    }
     return (result.stdout ?? '').split('\n')
       .map(l => l.trim().split(/\s+/)[0])
       .filter(m => m.startsWith('gemini-'));
@@ -163,8 +175,8 @@ async function main(): Promise<void> {
   };
 
   let models = fetchAgyModels(agyBin);
-  if (models.length === 0) models = [DEFAULT_MODEL];
-  else if (!models.includes(DEFAULT_MODEL)) models.unshift(DEFAULT_MODEL);
+  // 기본 모델을 항상 1번에 두어 Enter(default=1) 가 (default) 표시된 모델을 고르게 한다.
+  models = [DEFAULT_MODEL, ...models.filter((m) => m !== DEFAULT_MODEL)];
   console.log('사용할 AI 모델을 선택하세요:');
   models.forEach((m, i) => console.log(`  ${i + 1}) ${m}${m === DEFAULT_MODEL ? ' (default)' : ''}`));
   const max = models.length + 1;
@@ -183,6 +195,8 @@ async function main(): Promise<void> {
     model = models[modelIdx - 1];
   }
   AGY_CHILD_ENV.GEMINI_MODEL = model;
+  // generate-index.ts 도 같은 모델을 쓰도록 runTsx 가 상속하는 환경에도 설정한다.
+  process.env.GEMINI_MODEL = model;
   console.log(`  선택된 모델: ${model}\n`);
 
   console.log('업데이트 범위를 선택하세요:');

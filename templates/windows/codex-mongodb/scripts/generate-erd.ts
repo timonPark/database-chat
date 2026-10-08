@@ -3,7 +3,7 @@
  * MongoDB ERD 생성 — LLM 기반.
  *
  * `index.md` (컬렉션 인덱스) 와 `collection-mapping.md` (자연어 매핑, 주요 필드)
- * 두 파일을 Claude CLI 에 넘겨 Mermaid ER 다이어그램을 생성한다.
+ * 두 파일을 Codex CLI 에 넘겨 Mermaid ER 다이어그램을 생성한다.
  *
  * 이 접근의 이유:
  * - MongoDB 에는 FK 제약이 없어 관계는 도메인 지식으로 판단해야 한다.
@@ -17,28 +17,44 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { spawnSync, execSync } from 'child_process';
+import { spawn, execSync } from 'child_process';
 
 const INDEX_FILE: string = path.resolve('index.md');
 const MAPPING_FILE: string = path.resolve('collection-mapping.md');
 const COLLECTIONS_DIR: string = path.resolve('collections');
 const OUTPUT_FILE: string = path.resolve('erd.mmd');
-const MODEL: string = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5-20251001';
+const MODEL: string = process.env.CODEX_MODEL ?? 'gpt-5.6-luna';
 
-// Windows: npm 전역 설치 claude 는 .cmd shim 이라 shell:false 로 직접 실행 불가 (ENOENT).
-// shim 안의 claude.exe 상대 경로를 파싱해 절대 경로로 실행 (windows-platform-spec §1).
-function resolveClaudeBin(): string {
+// dotenv 로 읽은 DB 자격증명이 Codex 자식 프로세스로 상속되지 않게 제거한다.
+const CODEX_CHILD_ENV: NodeJS.ProcessEnv = (() => {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of ['DB_HOST', 'DB_PORT', 'DB_DATABASE', 'DB_USER_NAME', 'DB_USER_PASSWORD']) delete env[key];
+  return env;
+})();
+
+interface CodexCommand { cmd: string; prefixArgs: string[] }
+
+// Windows: codex.cmd shim 은 `node <npm>\node_modules\@openai\codex\bin\codex.js` 를 실행하는 래퍼다.
+// shell:true 로 .cmd 를 띄우면 공백 포함 경로(사용자명 · %TEMP%)가 깨지므로,
+// shim 에서 codex.js 경로를 찾아 현재 node 로 직접 실행한다 (shell:false).
+function resolveCodexCommand(): CodexCommand {
+  const envPath = process.env.CODEX_CLI_PATH?.trim();
+  if (envPath && fs.existsSync(envPath)) {
+    return /\.js$/i.test(envPath)
+      ? { cmd: process.execPath, prefixArgs: [envPath] }
+      : { cmd: envPath, prefixArgs: [] };
+  }
   try {
-    const shims = execSync('where claude.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    const shims = execSync('where codex.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .trim().split(/\r?\n/);
     for (const shim of shims) {
-      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+claude\.exe)/i);
+      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+codex\.js)/i);
       if (!m) continue;
-      const resolved = path.resolve(path.dirname(shim.trim()), m[1]);
-      if (fs.existsSync(resolved)) return resolved;
+      const codexJs = path.resolve(path.dirname(shim.trim()), m[1]);
+      if (fs.existsSync(codexJs)) return { cmd: process.execPath, prefixArgs: [codexJs] };
     }
   } catch { /* fallback */ }
-  return 'claude';
+  return { cmd: 'codex', prefixArgs: [] };
 }
 
 if (!fs.existsSync(INDEX_FILE) || !fs.existsSync(MAPPING_FILE)) {
@@ -69,8 +85,7 @@ for (const f of collectionFiles) {
 }
 
 const prompt: string = `아래는 MongoDB 데이터베이스의 컬렉션 인덱스, 자연어 매핑, 그리고 각 컬렉션의 상세 필드 문서입니다.
-이 문서들을 근거로 Mermaid ER 다이어그램을 만들어 현재 디렉토리의 \`erd.mmd\` 파일로 저장하세요.
-저장은 반드시 bash heredoc 을 사용하세요 (설명이나 다른 도구 사용 금지).
+이 문서들을 근거로 Mermaid ER 다이어그램을 만들어 현재 작업 디렉토리의 \`erd.mmd\` 파일로 저장하세요.
 
 ## index.md
 \`\`\`markdown
@@ -127,53 +142,55 @@ ${collectionsBlock}
 
 ## 작성 방식
 
-bash heredoc 으로 아래 **절대 경로** 에 저장하세요. 상대 경로나 다른 경로 금지.
-
-\`\`\`bash
-cat > '${OUTPUT_FILE}' <<'ERD_EOF'
-erDiagram
-  ...
-ERD_EOF
-\`\`\`
+- 반드시 상대 경로 \`erd.mmd\` 로 저장하세요 (절대 경로 · 다른 위치 금지 — 서버가 못 읽음)
+- 셸 종류(PowerShell/bash)에 맞는 방법 또는 파일 편집 도구로 UTF-8 로 저장하세요
+- 다른 파일은 만들거나 수정하지 마세요
 
 파일 저장 외의 응답(요약, 설명, 관계 목록 등)은 최소화하세요.
 `;
 
-console.error(`Claude CLI 호출 (모델: ${MODEL})... 인덱스 ${(indexContent.length / 1024).toFixed(1)}KB + 매핑 ${(mappingContent.length / 1024).toFixed(1)}KB + 컬렉션 상세 ${(collectionsBlock.length / 1024).toFixed(1)}KB`);
+console.error(`Codex CLI 호출 (모델: ${MODEL})... 인덱스 ${(indexContent.length / 1024).toFixed(1)}KB + 매핑 ${(mappingContent.length / 1024).toFixed(1)}KB + 컬렉션 상세 ${(collectionsBlock.length / 1024).toFixed(1)}KB`);
 
-// generate-schema.sh 와 동일한 패턴: Bash 툴만 허용해 Claude 가 heredoc 으로
-// 직접 파일을 쓴다. stdout 은 요약 텍스트가 나오지만 무시한다 — 우리는
-// 파일 존재 여부와 첫 줄이 erDiagram 인지만 확인한다.
-const result = spawnSync(resolveClaudeBin(), [
-  '-p',
-  '--model', MODEL,
-  '--allowedTools', 'Bash',
-], {
-  // 프롬프트는 stdin 으로 전달 — 수십 KB 프롬프트를 인자로 넘기면 Windows 커맨드라인
-  // 길이 제한(ENAMETOOLONG)에 걸린다 (windows-platform-spec §2)
-  input: prompt,
-  encoding: 'utf-8',
-  stdio: ['pipe', 'inherit', 'inherit'],
-  shell: false, // 인자 이스케이프 문제 방지 (windows-platform-spec §1)
-  maxBuffer: 256 * 1024 * 1024,
+// Codex 가 직접 erd.mmd 를 쓴다. 이전 실행의 erd.mmd 가 남아 있을 수 있어 존재 여부가 아닌
+// 수정 시각으로 생성 여부를 판단하고, 첫 줄이 erDiagram 인지 확인한다.
+const mtimeBefore: number = fs.existsSync(OUTPUT_FILE) ? fs.statSync(OUTPUT_FILE).mtimeMs : 0;
+
+// 프롬프트는 stdin 으로 전달 — 수십 KB 프롬프트를 인자로 넘기면 Windows 커맨드라인
+// 길이 제한(ENAMETOOLONG)에 걸린다. stdout/stderr 는 계속 읽어 비워야 파이프가 차서 멈추지 않는다.
+const codex: CodexCommand = resolveCodexCommand();
+const exitCode: number | null = await new Promise<number | null>((resolve) => {
+  const child = spawn(codex.cmd, [
+    ...codex.prefixArgs,
+    'exec',
+    '--skip-git-repo-check',
+    '--sandbox', 'workspace-write',
+    '--model', MODEL,
+  ], { stdio: ['pipe', 'pipe', 'pipe'], env: CODEX_CHILD_ENV, shell: false });
+  let log: string = '';
+  child.stdout.on('data', (d: Buffer) => { log += d; });
+  child.stderr.on('data', (d: Buffer) => { log += d; });
+  child.on('error', (err: NodeJS.ErrnoException) => {
+    console.error(`Codex CLI 실행 오류: ${err.code === 'ENOENT' ? 'codex CLI 를 찾을 수 없습니다 (npm install -g @openai/codex)' : err.message}`);
+    resolve(null);
+  });
+  child.on('close', (code: number | null) => {
+    if (code !== 0 && code !== null) console.error(log.slice(-2000));
+    resolve(code);
+  });
+  child.stdin.end(prompt);
 });
 
-if (result.error) {
-  console.error(`Claude CLI 실행 오류: ${result.error.message}`);
-  console.error('claude CLI 가 PATH 에 있는지 확인하세요.');
-  process.exit(1);
-}
-if (result.status !== 0) {
-  console.error(`Claude CLI 종료 코드 ${result.status}`);
+if (exitCode !== 0) {
+  console.error(`Codex CLI 종료 코드 ${exitCode}`);
   process.exit(1);
 }
 
-if (!fs.existsSync(OUTPUT_FILE)) {
-  console.error(`erd.mmd 파일이 생성되지 않았습니다. Claude 응답을 확인하세요.`);
+if (!fs.existsSync(OUTPUT_FILE) || fs.statSync(OUTPUT_FILE).mtimeMs <= mtimeBefore) {
+  console.error(`erd.mmd 파일이 생성되지 않았습니다. Codex 응답을 확인하세요.`);
   process.exit(1);
 }
 
-const saved: string = fs.readFileSync(OUTPUT_FILE, 'utf-8').trim();
+const saved: string = fs.readFileSync(OUTPUT_FILE, 'utf-8').replace(/^﻿/, '').trim();
 const firstLine: string = saved.split('\n')[0].trim();
 if (firstLine !== 'erDiagram') {
   console.error(`경고: erd.mmd 첫 줄이 'erDiagram' 이 아닙니다: '${firstLine}'`);

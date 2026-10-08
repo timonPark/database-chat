@@ -6,7 +6,7 @@
  * 1) Deterministic skeleton — collections/*.md 스캔해 정확한 컬렉션 목록/건수/주요
  *    필드를 뽑아 두 파일을 임시로 저장. LLM 호출이 실패해도 최소한 이 골격은
  *    남는다 (실제 DB 상태와 100% 일치).
- * 2) LLM enrichment — Claude CLI 에 skeleton + collections/*.md 를 넘겨 도메인
+ * 2) LLM enrichment — Codex CLI 에 skeleton + collections/*.md 를 넘겨 도메인
  *    카테고리(이모지 + 한글), 컬렉션별 한국어 설명, 자연어 키워드를 채운 최종
  *    버전으로 덮어쓴다. 실패 시 skeleton 유지.
  *
@@ -21,28 +21,45 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { spawnSync, execSync } from 'child_process';
+import { spawn, execSync } from 'child_process';
 
 const COLLECTIONS_DIR: string = path.resolve('collections');
 const INDEX_FILE: string = path.resolve('index.md');
 const MAPPING_FILE: string = path.resolve('collection-mapping.md');
 const DB_NAME: string = process.env.DB_DATABASE ?? '(DB_DATABASE 미지정)';
-const MODEL: string = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5-20251001';
+const MODEL: string = process.env.CODEX_MODEL ?? 'gpt-5.6-luna';
+const SKELETON_MARKER: string = 'skeleton — LLM enrichment 대기 중';
 
-// Windows: npm 전역 설치 claude 는 .cmd shim 이라 shell:false 로 직접 실행 불가 (ENOENT).
-// shim 안의 claude.exe 상대 경로를 파싱해 절대 경로로 실행 (windows-platform-spec §1).
-function resolveClaudeBin(): string {
+// dotenv 로 읽은 DB 자격증명이 Codex 자식 프로세스로 상속되지 않게 제거한다.
+const CODEX_CHILD_ENV: NodeJS.ProcessEnv = (() => {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of ['DB_HOST', 'DB_PORT', 'DB_DATABASE', 'DB_USER_NAME', 'DB_USER_PASSWORD']) delete env[key];
+  return env;
+})();
+
+interface CodexCommand { cmd: string; prefixArgs: string[] }
+
+// Windows: codex.cmd shim 은 `node <npm>\node_modules\@openai\codex\bin\codex.js` 를 실행하는 래퍼다.
+// shell:true 로 .cmd 를 띄우면 공백 포함 경로(사용자명 · %TEMP%)가 깨지므로,
+// shim 에서 codex.js 경로를 찾아 현재 node 로 직접 실행한다 (shell:false).
+function resolveCodexCommand(): CodexCommand {
+  const envPath = process.env.CODEX_CLI_PATH?.trim();
+  if (envPath && fs.existsSync(envPath)) {
+    return /\.js$/i.test(envPath)
+      ? { cmd: process.execPath, prefixArgs: [envPath] }
+      : { cmd: envPath, prefixArgs: [] };
+  }
   try {
-    const shims = execSync('where claude.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    const shims = execSync('where codex.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .trim().split(/\r?\n/);
     for (const shim of shims) {
-      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+claude\.exe)/i);
+      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+codex\.js)/i);
       if (!m) continue;
-      const resolved = path.resolve(path.dirname(shim.trim()), m[1]);
-      if (fs.existsSync(resolved)) return resolved;
+      const codexJs = path.resolve(path.dirname(shim.trim()), m[1]);
+      if (fs.existsSync(codexJs)) return { cmd: process.execPath, prefixArgs: [codexJs] };
     }
   } catch { /* fallback */ }
-  return 'claude';
+  return { cmd: 'codex', prefixArgs: [] };
 }
 
 if (!fs.existsSync(COLLECTIONS_DIR)) {
@@ -112,7 +129,7 @@ function writeSkeleton(): void {
     lines.push('');
     lines.push(`> **database**: \`${DB_NAME}\` — ${collections.length}개 컬렉션`);
     lines.push(`> 최종 업데이트: ${today}`);
-    lines.push('> 자동 생성 (skeleton — LLM enrichment 대기 중)');
+    lines.push(`> 자동 생성 (${SKELETON_MARKER})`);
     lines.push('');
     for (const prefix of sortedPrefixes) {
       const items: CollectionInfo[] = groups.get(prefix)!;
@@ -134,7 +151,7 @@ function writeSkeleton(): void {
     lines.push('');
     lines.push(`> **database**: \`${DB_NAME}\``);
     lines.push(`> 최종 업데이트: ${today}`);
-    lines.push('> 자동 생성 (skeleton — LLM enrichment 대기 중)');
+    lines.push(`> 자동 생성 (${SKELETON_MARKER})`);
     lines.push('');
     for (const prefix of sortedPrefixes) {
       const items: CollectionInfo[] = groups.get(prefix)!;
@@ -157,7 +174,7 @@ writeSkeleton();
 console.error(`skeleton 저장 완료 (${collections.length}개 컬렉션)`);
 
 // ── 2단계: LLM enrichment ────────────────────────────────────────────────────
-// collections/*.md 원문을 프롬프트에 포함해 Claude 가 도메인 카테고리와 자연어
+// collections/*.md 원문을 프롬프트에 포함해 Codex 가 도메인 카테고리와 자연어
 // 키워드, 한국어 설명을 채워 두 파일을 덮어쓴다.
 
 let collectionsBlock: string = '';
@@ -242,18 +259,10 @@ ${collectionsBlock}
 
 ## 저장
 
-bash heredoc 으로 아래 **절대 경로** 두 파일을 순서대로 저장하세요.
-상대 경로나 다른 경로를 쓰지 마세요 (다른 위치에 쓰면 서버가 못 읽음).
-
-\`\`\`bash
-cat > '${INDEX_FILE}' <<'INDEX_EOF'
-... 여기에 index.md 내용 ...
-INDEX_EOF
-
-cat > '${MAPPING_FILE}' <<'MAPPING_EOF'
-... 여기에 collection-mapping.md 내용 ...
-MAPPING_EOF
-\`\`\`
+현재 작업 디렉토리에 \`index.md\`, \`collection-mapping.md\` 두 파일을 덮어써서 저장하세요.
+- 반드시 상대 경로 \`index.md\`, \`collection-mapping.md\` 로 저장 (절대 경로 · 다른 위치 금지 — 서버가 못 읽음)
+- 셸 종류(PowerShell/bash)에 맞는 방법 또는 파일 편집 도구로 UTF-8 로 저장
+- \`collections/\` 아래 파일은 수정하지 마세요
 
 파일 저장 외의 응답(설명, 요약)은 최소화하세요.
 `;
@@ -261,27 +270,33 @@ MAPPING_EOF
 const promptSize: number = prompt.length;
 console.error(`LLM enrichment 호출 (모델: ${MODEL}, 프롬프트 ${(promptSize / 1024).toFixed(1)}KB)...`);
 
-const result = spawnSync(resolveClaudeBin(), [
-  '-p',
-  '--model', MODEL,
-  '--allowedTools', 'Bash',
-], {
-  // 프롬프트는 stdin 으로 전달 — 수십 KB 프롬프트를 인자로 넘기면 Windows 커맨드라인
-  // 길이 제한(ENAMETOOLONG)에 걸린다 (windows-platform-spec §2)
-  input: prompt,
-  encoding: 'utf-8',
-  stdio: ['pipe', 'inherit', 'inherit'],
-  shell: false, // 인자 이스케이프 문제 방지 (windows-platform-spec §1)
-  maxBuffer: 256 * 1024 * 1024,
+// 프롬프트는 stdin 으로 전달 — 수십 KB 프롬프트를 인자로 넘기면 Windows 커맨드라인
+// 길이 제한(ENAMETOOLONG)에 걸린다. Codex 의 상세 로그는 실패 시에만 보여준다.
+const codex: CodexCommand = resolveCodexCommand();
+const exitCode: number | null = await new Promise<number | null>((resolve) => {
+  const child = spawn(codex.cmd, [
+    ...codex.prefixArgs,
+    'exec',
+    '--skip-git-repo-check',
+    '--sandbox', 'workspace-write',
+    '--model', MODEL,
+  ], { stdio: ['pipe', 'pipe', 'pipe'], env: CODEX_CHILD_ENV, shell: false });
+  let log: string = '';
+  child.stdout.on('data', (d: Buffer) => { log += d; });
+  child.stderr.on('data', (d: Buffer) => { log += d; });
+  child.on('error', (err: NodeJS.ErrnoException) => {
+    console.error(`Codex CLI 실행 오류: ${err.code === 'ENOENT' ? 'codex CLI 를 찾을 수 없습니다 (npm install -g @openai/codex)' : err.message}`);
+    resolve(null);
+  });
+  child.on('close', (code: number | null) => {
+    if (code !== 0 && code !== null) console.error(log.slice(-2000));
+    resolve(code);
+  });
+  child.stdin.end(prompt);
 });
 
-if (result.error) {
-  console.error(`Claude CLI 실행 오류: ${result.error.message}`);
-  console.error('Skeleton 파일은 남아있습니다. 나중에 다시 실행하면 enrichment 재시도.');
-  process.exit(0);
-}
-if (result.status !== 0) {
-  console.error(`Claude CLI 종료 코드 ${result.status}. Skeleton 유지.`);
+if (exitCode !== 0) {
+  console.error(`Codex CLI 종료 코드 ${exitCode}. Skeleton 유지 — 나중에 다시 실행하면 enrichment 재시도.`);
   process.exit(0);
 }
 
@@ -290,6 +305,12 @@ if (!fs.existsSync(INDEX_FILE) || !fs.existsSync(MAPPING_FILE)) {
   console.error('경고: enrichment 후 파일이 사라졌습니다. Skeleton 재생성.');
   writeSkeleton();
   process.exit(1);
+}
+const stillSkeleton: string[] = [INDEX_FILE, MAPPING_FILE]
+  .filter((f) => fs.readFileSync(f, 'utf-8').includes(SKELETON_MARKER))
+  .map((f) => path.basename(f));
+if (stillSkeleton.length > 0) {
+  console.error(`경고: ${stillSkeleton.join(', ')} 가 갱신되지 않아 skeleton 상태입니다. schema.bat 를 다시 실행하세요.`);
 }
 
 const indexSize: number = fs.statSync(INDEX_FILE).size;

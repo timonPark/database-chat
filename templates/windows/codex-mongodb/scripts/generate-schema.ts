@@ -2,7 +2,7 @@
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
-import { spawnSync, execSync } from 'child_process';
+import { spawn, spawnSync, execSync } from 'child_process';
 
 const DEFAULT_MODEL = 'gpt-5.6-luna';
 const ENTITY_DIR = 'collections';
@@ -31,23 +31,29 @@ const CODEX_CHILD_ENV: NodeJS.ProcessEnv = (() => {
   return env;
 })();
 
-// Windows: npm 전역 설치 codex 는 .cmd shim 이라 shell:false 로 직접 실행 불가 (ENOENT).
-function resolveCodexBin(): string {
+interface CodexCommand { cmd: string; prefixArgs: string[] }
+
+// Windows: codex.cmd shim 은 `node <npm>\node_modules\@openai\codex\bin\codex.js` 를 실행하는 래퍼다.
+// shell:true 로 .cmd 를 띄우면 공백 포함 경로(사용자명 · %TEMP%)가 깨지므로,
+// shim 에서 codex.js 경로를 찾아 현재 node 로 직접 실행한다 (shell:false).
+function resolveCodexCommand(): CodexCommand {
   const envPath = process.env.CODEX_CLI_PATH?.trim();
-  if (envPath) {
-    try { execSync(`"${envPath}" --version`, { stdio: 'ignore' }); return envPath; } catch { /* fallback */ }
+  if (envPath && fs.existsSync(envPath)) {
+    return /\.js$/i.test(envPath)
+      ? { cmd: process.execPath, prefixArgs: [envPath] }
+      : { cmd: envPath, prefixArgs: [] };
   }
   try {
     const shims = execSync('where codex.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .trim().split(/\r?\n/);
     for (const shim of shims) {
-      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+codex\.exe)/i);
+      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+codex\.js)/i);
       if (!m) continue;
-      const resolved = path.resolve(path.dirname(shim.trim()), m[1]);
-      if (fs.existsSync(resolved)) return resolved;
+      const codexJs = path.resolve(path.dirname(shim.trim()), m[1]);
+      if (fs.existsSync(codexJs)) return { cmd: process.execPath, prefixArgs: [codexJs] };
     }
   } catch { /* fallback */ }
-  return 'codex';
+  return { cmd: 'codex', prefixArgs: [] };
 }
 
 function runTsx(script: string, capture: boolean) {
@@ -87,22 +93,28 @@ function fetchModelsFromCache(): string[] {
   } catch { return []; }
 }
 
-function buildBatchPrompt(dbName: string, batchSchema: string): string {
+// Windows 의 Codex 는 기본 셸이 PowerShell 이라 bash heredoc · 절대 경로 지시는 경로가 깨진다.
+// 셸을 지정하지 않고 작업 디렉토리 기준 상대 경로로만 저장하게 한다.
+function buildBatchPrompt(dbName: string, batchSchema: string, names: string[]): string {
   return `아래는 MongoDB 데이터베이스 \`${dbName}\`의 컬렉션 정보 일부입니다:
 
 \`\`\`
 ${batchSchema}
 \`\`\`
 
-위 컬렉션들에 대해 다음 JSON 만 반환하세요 (다른 텍스트 없이):
-{
-  "collections": {
-    "<컬렉션명>": "<컬렉션명>.md 파일의 전체 markdown 내용",
-    ...
-  }
-}
+위 컬렉션 각각에 대해 \`${ENTITY_DIR}/<컬렉션명>.md\` 파일을 작성하세요.
 
-각 markdown 은 다음 형식:
+## 저장 규칙
+- 작성할 파일 (총 ${names.length}개): ${names.map((n) => `\`${ENTITY_DIR}/${n}.md\``).join(', ')}
+- 파일명은 위 목록 그대로 사용하세요 (\`${TAG}\` 줄의 컬렉션명 — 대소문자 · 점(.) 변경 금지)
+- \`${ENTITY_DIR}\` 디렉토리가 없으면 먼저 만드세요
+- index.md · collection-mapping.md 등 다른 파일은 만들거나 수정하지 마세요 (이후 단계에서 처리)
+- 반드시 현재 작업 디렉토리 기준 상대 경로로 저장하세요 (절대 경로 금지)
+- 셸 종류(PowerShell/bash)에 맞는 방법 또는 파일 편집 도구로 UTF-8 로 저장하세요
+- 파일 저장 외의 응답(설명, 요약)은 최소화하세요
+
+## <컬렉션명>.md 형식
+\`\`\`markdown
 # <컬렉션명>
 
 > **database**: \`${dbName}\` | **건수**: N건
@@ -117,35 +129,35 @@ ${batchSchema}
 ## 관련 컬렉션
 
 - 관련 참조 관계 서술
+\`\`\`
 
-index / mapping 등 다른 키는 넣지 마세요. collections 만.`;
+## 작성 지침
+- 각 필드의 한글 설명은 이름과 타입을 참고해 자연스럽게 작성하세요`;
 }
 
-function extractJson(text: string): unknown | null {
-  const stripped = text.replace(/^```(?:json)?\s*/im, '').replace(/```\s*$/im, '').trim();
-  const start = stripped.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0; let inStr = false; let esc = false;
-  for (let i = start; i < stripped.length; i++) {
-    const c = stripped[i];
-    if (esc) { esc = false; continue; }
-    if (c === '\\') { esc = true; continue; }
-    if (c === '"') { inStr = !inStr; continue; }
-    if (inStr) continue;
-    if (c === '{') depth++;
-    else if (c === '}') { depth--; if (depth === 0) { try { return JSON.parse(stripped.slice(start, i + 1)); } catch { return null; } } }
-  }
-  return null;
-}
-
-function runCodexBatch(codexBin: string, model: string, prompt: string): string {
-  const result = spawnSync(
-    codexBin,
-    ['exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '--model', model, prompt],
-    { encoding: 'utf-8', maxBuffer: 256 * 1024 * 1024, env: CODEX_CHILD_ENV, shell: false }
-  );
-  if (result.error) throw result.error;
-  return (result.stdout ?? '') + (result.stderr ?? '');
+// 프롬프트는 stdin 으로 전달 — 인자로 넘기면 Windows 커맨드라인 길이 제한에 걸리고
+// Codex 가 프롬프트 첫 단어를 인자로 오인한다 ("unexpected argument").
+function runCodex(model: string, prompt: string, onPoll?: () => void): Promise<void> {
+  const codex = resolveCodexCommand();
+  const args = [...codex.prefixArgs, 'exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '--model', model];
+  return new Promise((resolve, reject) => {
+    const child = spawn(codex.cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], env: CODEX_CHILD_ENV, shell: false });
+    // Codex 는 프롬프트 에코 등 상세 로그를 많이 출력한다. 화면에는 내보내지 않고 실패 시에만 보여준다.
+    let log = '';
+    child.stdout.on('data', (d: Buffer) => { log += d; });
+    child.stderr.on('data', (d: Buffer) => { log += d; });
+    const timer = onPoll ? setInterval(onPoll, 300) : undefined;
+    const finish = (err?: Error): void => {
+      clearInterval(timer);
+      onPoll?.();
+      if (err) reject(err); else resolve();
+    };
+    child.on('error', (err: NodeJS.ErrnoException) => finish(new Error(err.code === 'ENOENT'
+      ? 'codex CLI 를 찾을 수 없습니다. npm install -g @openai/codex 로 설치하세요.'
+      : err.message)));
+    child.on('close', (code: number | null) => finish(code === 0 ? undefined : new Error(`Codex CLI 종료 코드 ${code}\n${log.slice(-2000)}`)));
+    child.stdin.end(prompt);
+  });
 }
 
 async function main(): Promise<void> {
@@ -179,6 +191,8 @@ async function main(): Promise<void> {
     model = models[modelIdx - 1];
   }
   CODEX_CHILD_ENV.CODEX_MODEL = model;
+  // generate-index.ts 도 같은 모델을 쓰도록 runTsx 가 상속하는 환경에도 설정한다.
+  process.env.CODEX_MODEL = model;
   console.log(`  선택된 모델: ${model}\n`);
 
   console.log('업데이트 범위를 선택하세요:');
@@ -232,36 +246,41 @@ async function main(): Promise<void> {
   console.log(`[2/3] 배치 분할: 전체 ${batches.length}개 (배치당 최대 ${BATCH_SIZE}개)\n`);
 
   console.log(`[3/3] LLM 호출 시작 (모델: ${model})`);
-  const codexBin = resolveCodexBin();
   let done = 0;
   const total = blocks.length;
+  const missing: string[] = [];
 
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
+    const names = batch.map(nameOf);
     console.log(`  ── 배치 ${i + 1}/${batches.length} (${batch.length}개 컬렉션) ──`);
-    const prompt = buildBatchPrompt(dbName, batch.map((b) => b.join('\n')).join('\n'));
-    let output: string;
+
+    // Codex 가 파일을 쓰는 즉시 진행률을 표시하기 위해 디스크를 폴링한다.
+    const seen = new Set<string>();
+    const poll = (): void => {
+      for (const name of names) {
+        if (seen.has(name) || !fs.existsSync(path.join(ENTITY_DIR, `${name}.md`))) continue;
+        seen.add(name);
+        done += 1;
+        console.log(`      [${done}/${total}] ${name} 완료`);
+      }
+    };
+
+    const prompt = buildBatchPrompt(dbName, batch.map((b) => b.join('\n')).join('\n'), names);
     try {
-      output = runCodexBatch(codexBin, model, prompt);
+      await runCodex(model, prompt, poll);
     } catch (err) {
       console.log(`\n배치 ${i + 1} 오류: ${(err as Error).message}`);
       process.exit(1);
     }
-    const parsed = extractJson(output) as Record<string, unknown> | null;
-    const collections = parsed?.collections;
-    if (!collections || typeof collections !== 'object') {
-      console.log(`\n배치 ${i + 1} 오류: JSON 응답 파싱 실패\n${output.slice(0, 400)}`);
-      process.exit(1);
-    }
-    for (const [name, content] of Object.entries(collections as Record<string, unknown>)) {
-      if (typeof content !== 'string') continue;
-      const safeName = name.replace(/[/\\]/g, '_');
-      fs.writeFileSync(path.join(ENTITY_DIR, `${safeName}.md`), content, 'utf-8');
-      done += 1;
-      console.log(`      [${done}/${total}] ${name} 완료`);
-    }
+    missing.push(...names.filter((n) => !seen.has(n)));
   }
   console.log('');
+
+  if (missing.length > 0) {
+    console.log(`  ⚠  파일이 생성되지 않은 컬렉션 ${missing.length}개: ${missing.join(', ')}`);
+    console.log('     schema.bat 를 다시 실행해 "2) 부분 업데이트 — .md 없는 컬렉션만" 으로 재시도하세요.\n');
+  }
 
   if (mode !== 'full') {
     console.log(`  ✔ collections/ 부분 갱신 완료 (${done}개)`);

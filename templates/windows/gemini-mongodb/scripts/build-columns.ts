@@ -145,6 +145,8 @@ export function buildColumnsFromPipeline(
   const rootKeys = collectRowKeys(rows);
   const columns: Column[] = [];
   const unmapped: string[] = [];
+  // $replaceRoot 로 루트가 lookup 컬렉션으로 바뀌었으면 그 컬렉션 스키마로 라벨링한다.
+  const rootCollection: string = analysis.pathToCollection.get('') ?? baseCollection;
 
   if (!analysis.shapeBroken) {
     // Group keys by which mapping path they belong to (base = "" or nested = "movie", "movie.director", ...)
@@ -176,7 +178,7 @@ export function buildColumnsFromPipeline(
           }
         }
       } else {
-        const baseSchema = getSchema(baseCollection);
+        const baseSchema = getSchema(rootCollection);
         const mapped = baseSchema ? columnFromSchemaField(key, baseSchema, key) : null;
         if (mapped) columns.push(mapped);
         else {

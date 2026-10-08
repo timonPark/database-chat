@@ -409,22 +409,29 @@ app.post('/chat/cancel', (req: Request<object, object, CancelBody>, res: Respons
 
 // ── Windows 전용 헬퍼 ─────────────────────────────────────────────────────────
 
-function resolveCodexBin(): string {
+interface CodexCommand { cmd: string; prefixArgs: string[] }
+
+// Windows: codex.cmd shim 은 `node <npm>\node_modules\@openai\codex\bin\codex.js` 를 실행하는 래퍼다.
+// shell:true 로 .cmd 를 띄우면 공백 포함 경로(사용자명 · %TEMP%)가 깨지므로,
+// shim 에서 codex.js 경로를 찾아 현재 node 로 직접 실행한다 (shell:false).
+function resolveCodexCommand(): CodexCommand {
   const envPath = process.env.CODEX_CLI_PATH?.trim();
-  if (envPath) {
-    try { execSync(`"${envPath}" --version`, { stdio: 'ignore' }); return envPath; } catch { /* fallback */ }
+  if (envPath && fs.existsSync(envPath)) {
+    return /\.js$/i.test(envPath)
+      ? { cmd: process.execPath, prefixArgs: [envPath] }
+      : { cmd: envPath, prefixArgs: [] };
   }
   try {
     const shims = execSync('where codex.cmd', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .trim().split(/\r?\n/);
     for (const shim of shims) {
-      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+codex\.exe)/i);
+      const m = fs.readFileSync(shim.trim(), 'utf-8').match(/%~?dp0%?\\([^\s"]+codex\.js)/i);
       if (!m) continue;
-      const resolved = path.resolve(path.dirname(shim.trim()), m[1]);
-      if (fs.existsSync(resolved)) return resolved;
+      const codexJs = path.resolve(path.dirname(shim.trim()), m[1]);
+      if (fs.existsSync(codexJs)) return { cmd: process.execPath, prefixArgs: [codexJs] };
     }
   } catch { /* fallback */ }
-  return 'codex';
+  return { cmd: 'codex', prefixArgs: [] };
 }
 
 app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
@@ -448,6 +455,7 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
   send('progress', '쿼리 생성 준비 중...');
 
   const outputPath: string = path.join(os.tmpdir(), `codex-out-${crypto.randomUUID()}.txt`);
+  const prompt: string = buildCodexPrompt(message.trim(), limit);
   const codexArgs: string[] = [
     'exec',
     '--skip-git-repo-check',
@@ -455,11 +463,13 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
     '--sandbox', 'read-only',
     '--output-last-message', outputPath,
     '--model', CODEX_MODEL,
-    buildCodexPrompt(message.trim(), limit),
   ];
 
-  const child: ChildProcess = spawn(resolveCodexBin(), codexArgs,
-    { stdio: ['ignore', 'pipe', 'pipe'], env: CODEX_CHILD_ENV, shell: false });
+  // 프롬프트는 stdin 으로 전달 — 인자로 넘기면 Windows 커맨드라인 길이 제한에 걸린다.
+  const codex: CodexCommand = resolveCodexCommand();
+  const child: ChildProcess = spawn(codex.cmd, [...codex.prefixArgs, ...codexArgs],
+    { stdio: ['pipe', 'pipe', 'pipe'], env: CODEX_CHILD_ENV, shell: false });
+  child.stdin!.end(prompt);
 
   if (requestId) activeJobs.set(requestId, child);
 

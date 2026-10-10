@@ -181,6 +181,7 @@ ${buildTableGuide()}
 - **LIMIT 문법 없음** — 상위 N 은 \`SELECT TOP ${limit} ...\` 또는 \`OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY\` (ORDER BY 필수)
 - LLM 이 TOP 를 안 붙였을 때 서버는 강제 주입하지 않으므로 반드시 프롬프트에서 명시
 - JOIN 시 alias 는 짧게 (t1, t2 등). SELECT 컬럼 라벨링은 서버가 처리
+- 컬럼은 원본 그대로 SELECT. 이름 등 여러 컬럼을 + · CONCAT 로 합친 계산 컬럼을 만들지 말 것 (예: first_name, last_name 을 각각 SELECT — 화면 라벨이 스키마 컬럼에 매칭되어야 함). COUNT · SUM 등 집계는 허용
 - 단순 WHERE · ORDER BY 든 JOIN · GROUP BY · 서브쿼리 · HAVING 이든 동일하게 kind:"sql" 하나로 처리`;
 }
 

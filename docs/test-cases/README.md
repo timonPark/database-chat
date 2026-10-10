@@ -115,7 +115,7 @@ curl -s http://localhost:3111/db-query -H 'Content-Type: application/json' \
 
 | DB | Windows | Mac | CTE (`WITH`) 서버 허용 | 비고 |
 |---|---|---|---|---|
-| MySQL | #191 | #196 | Windows claude · codex 허용 / Windows gemini · Mac 3종 거부 | Windows 결과: [claude](results/windows-claude-mysql.md) · [codex](results/windows-codex-mysql.md) · [gemini](results/windows-gemini-mysql.md) |
+| MySQL | #191 | #196 | Windows claude · codex 허용 / Windows gemini · Mac 3종 거부 | Windows 결과: [claude](results/windows-claude-mysql.md) · [codex](results/windows-codex-mysql.md) · [gemini](results/windows-gemini-mysql.md) / Mac 결과: [claude](results/mac-claude-mysql.md) · [codex](results/mac-codex-mysql.md) · [gemini](results/mac-gemini-mysql.md) |
 | PostgreSQL | #192 | #197 | 전부 허용 | |
 | Oracle | #193 | #198 | 전부 허용 | |
 | MSSQL | #194 | #199 | 전부 허용 | 민감 컬럼 노출 (아래 알려진 문제) |

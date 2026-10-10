@@ -123,12 +123,48 @@ export function loadAllSchemas(dir: string): LoadResult {
   return { loaded, failed, total: files.length };
 }
 
+function lastSegment(name: string): string {
+  const parts = name.split('.');
+  return parts[parts.length - 1];
+}
+
+// SQL 에 적힌 테이블명 → tables/ 의 실제 파일명(확장자 제외).
+// 정확한 이름 → schema.table ↔ table 양방향 → 대소문자 무시 순.
+// (MSSQL 은 스키마 파일이 dbo.comments.md 인데 SQL 은 FROM comments · FROM dbo.comments 둘 다 가능)
+function resolveTableName(dir: string, tableName: string): string | undefined {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).map(tableNameFromFile).sort();
+  } catch {
+    return undefined;
+  }
+
+  const target = lastSegment(tableName);
+  const matchers: ((name: string) => boolean)[] = [
+    (name) => name === tableName,
+    (name) => name === target,
+    (name) => lastSegment(name) === target,
+    (name) => name.toLowerCase() === tableName.toLowerCase(),
+    (name) => name.toLowerCase() === target.toLowerCase(),
+    (name) => lastSegment(name).toLowerCase() === target.toLowerCase(),
+  ];
+  for (const match of matchers) {
+    const found = names.find(match);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 /**
  * Look up a table schema, refreshing from disk if the file has changed
  * since it was last cached. Returns undefined for missing or unparseable files.
+ * tableName 은 SQL 에 적힌 그대로여도 된다 (resolveTableName 참고).
  */
-export function getSchema(tableName: string): TableSchema | undefined {
+export function getSchema(rawTableName: string): TableSchema | undefined {
   if (!cachedDir) return undefined;
+
+  const tableName = resolveTableName(cachedDir, rawTableName);
+  if (tableName === undefined) return undefined;
 
   const filePath = path.join(cachedDir, `${tableName}.md`);
   let stat: fs.Stats;

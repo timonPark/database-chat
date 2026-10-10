@@ -29,7 +29,7 @@ docs/test-cases/
 | PostgreSQL | dvdrental (15 tables, Sakila 계열) | PostgreSQL Tutorial dvdrental 복원, `DB_DATABASE=dvdrental` | [cases/postgresql.md](cases/postgresql.md) |
 | Oracle | HR (7 tables) | oracle/db-sample-schemas human_resources, 계정 `hr` · SERVICE `FREEPDB1` | [cases/oracle.md](cases/oracle.md) |
 | MSSQL | AdventureWorksLT2022 | Microsoft 공식 .bak 복원, 업무 테이블은 `SalesLT` 스키마 | [cases/mssql.md](cases/mssql.md) |
-| MongoDB | sample.json (users · products · orders) | `seeds/mongodb/sample.json` 적재 | [cases/mongodb.md](cases/mongodb.md) |
+| MongoDB | Atlas Sample Datasets (23 collections, 케이스는 `mflix_*`) | MongoDB Atlas `sampledata.archive` 를 한 DB 로 통합 복원 (컬렉션명 `<원본DB>_<컬렉션>`), `DB_DATABASE=sample_data` | [cases/mongodb.md](cases/mongodb.md) |
 
 `npm run seed` 는 `bash scripts/seed.sh` 를 실행합니다 (Docker 컨테이너 대상). Windows 에서는 Git Bash 와 Docker Desktop 이 필요합니다.
 
@@ -119,7 +119,7 @@ curl -s http://localhost:3111/db-query -H 'Content-Type: application/json' \
 | PostgreSQL | #192 | #197 | 전부 허용 | |
 | Oracle | #193 | #198 | 전부 허용 | |
 | MSSQL | #194 | #199 | 전부 허용 | 민감 컬럼 노출 (아래 알려진 문제) |
-| MongoDB | #195 | #200 | 해당 없음 | |
+| MongoDB | #195 | #200 | 해당 없음 | Mac 결과: [claude](results/mac-claude-mongodb.md) · [codex](results/mac-codex-mongodb.md) · [gemini](results/mac-gemini-mongodb.md) |
 
 - **CTE 케이스**는 템플릿의 `ALLOWED_SQL_PREFIXES` 에 따라 기대 결과가 다릅니다. `--project` 를 주면 실행기가 자동으로 판정합니다 (미허용 템플릿은 400 거부가 PASS)
 - **Mac SQL 4종 (#196 ~ #199)** 은 #178 (mac 결과 컬럼 매칭 수정) 머지 후 진행합니다. 그 전에는 JOIN · 따옴표 · CTE 케이스가 실패합니다

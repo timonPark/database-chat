@@ -97,6 +97,7 @@ export interface LoadResult {
 export function loadAllSchemas(dir: string): LoadResult {
   cachedDir = dir;
   cache.clear();
+  dirListing = null;
 
   if (!fs.existsSync(dir)) {
     return { loaded: 0, failed: 0, total: 0 };
@@ -123,34 +124,46 @@ export function loadAllSchemas(dir: string): LoadResult {
   return { loaded, failed, total: files.length };
 }
 
-function lastSegment(name: string): string {
-  const parts = name.split('.');
-  return parts[parts.length - 1];
+interface DirListing {
+  mtimeMs: number;
+  names: string[];
 }
 
-// SQL 에 적힌 테이블명 → tables/ 의 실제 파일명(확장자 제외).
-// 정확한 이름 → schema.table ↔ table 양방향 → 대소문자 무시 순.
-// (MSSQL 은 스키마 파일이 dbo.comments.md 인데 SQL 은 FROM comments · FROM dbo.comments 둘 다 가능)
-function resolveTableName(dir: string, tableName: string): string | undefined {
-  let names: string[];
-  try {
-    names = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).map(tableNameFromFile).sort();
-  } catch {
-    return undefined;
-  }
+let dirListing: DirListing | null = null;
 
-  const target = lastSegment(tableName);
-  const matchers: ((name: string) => boolean)[] = [
-    (name) => name === tableName,
-    (name) => name === target,
-    (name) => lastSegment(name) === target,
-    (name) => name.toLowerCase() === tableName.toLowerCase(),
-    (name) => name.toLowerCase() === target.toLowerCase(),
-    (name) => lastSegment(name).toLowerCase() === target.toLowerCase(),
-  ];
-  for (const match of matchers) {
-    const found = names.find(match);
-    if (found !== undefined) return found;
+function listTableNames(): string[] {
+  if (!cachedDir) return [];
+  try {
+    const stat = fs.statSync(cachedDir);
+    if (!dirListing || dirListing.mtimeMs !== stat.mtimeMs) {
+      const names = fs.readdirSync(cachedDir).filter((f) => f.endsWith('.md')).map(tableNameFromFile);
+      dirListing = { mtimeMs: stat.mtimeMs, names };
+    }
+    return dirListing.names;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * SQL 에 쓴 테이블 참조를 tables/ 의 파일 이름으로 해석.
+ * 파일 이름은 DB 마다 다름 — MSSQL `dbo.comments` · PostgreSQL/MySQL `comments` · Oracle `COMMENTS`.
+ * 참조도 `comments` · `dbo.comments` · `mydb.dbo.comments` · `public.comments` 등으로 다양하므로
+ * 대소문자 무시 + 앞쪽 세그먼트를 하나씩 떼며 일치하는 파일을 찾는다.
+ * 실제 존재하는 파일 이름만 반환하므로 SQL 의 임의 문자열이 그대로 path.join 에 들어가지 않는다.
+ */
+function resolveTableName(ref: string): string | undefined {
+  const names = listTableNames();
+  const segments = ref.split('.').map((seg) => seg.trim().toLowerCase()).filter((seg) => seg.length > 0);
+  for (let i = 0; i < segments.length; i += 1) {
+    const suffix = segments.slice(i).join('.');
+    const exact = names.find((n) => n.toLowerCase() === suffix);
+    if (exact) return exact;
+    // 접두사 없는 참조 (`comments`) ↔ 스키마 접두사가 붙은 파일 (`dbo.comments`). 여러 개면 dbo 우선
+    const qualified = names.filter((n) => n.toLowerCase().endsWith(`.${suffix}`));
+    if (qualified.length > 0) {
+      return qualified.find((n) => n.toLowerCase() === `dbo.${suffix}`) ?? [...qualified].sort()[0];
+    }
   }
   return undefined;
 }
@@ -158,13 +171,13 @@ function resolveTableName(dir: string, tableName: string): string | undefined {
 /**
  * Look up a table schema, refreshing from disk if the file has changed
  * since it was last cached. Returns undefined for missing or unparseable files.
- * tableName 은 SQL 에 적힌 그대로여도 된다 (resolveTableName 참고).
+ * `ref` 는 SQL 에 쓴 테이블 참조 그대로 (스키마 접두사 · 대소문자 무관).
  */
-export function getSchema(rawTableName: string): TableSchema | undefined {
+export function getSchema(ref: string): TableSchema | undefined {
   if (!cachedDir) return undefined;
 
-  const tableName = resolveTableName(cachedDir, rawTableName);
-  if (tableName === undefined) return undefined;
+  const tableName = resolveTableName(ref);
+  if (!tableName) return undefined;
 
   const filePath = path.join(cachedDir, `${tableName}.md`);
   let stat: fs.Stats;

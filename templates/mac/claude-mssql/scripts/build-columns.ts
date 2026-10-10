@@ -1,8 +1,8 @@
-import type { TableSchema } from './load-schema-index.js';
+import type { FieldSchema, TableSchema } from './load-schema-index.js';
 import { getSchema } from './load-schema-index.js';
-import type { SqlAnalysis, TableRef } from './sql-analyze.js';
+import type { QueryInfo, SqlAnalysis, SqlSource } from './sql-analyze.js';
 
-// SQL 응답의 rows keys 를 FROM · JOIN 테이블 스키마에 매칭해 columns 배열 구성.
+// SQL 응답의 rows keys 를 SELECT 목록 · FROM/JOIN 소스 테이블 스키마에 매칭해 columns 배열 구성.
 // mongodb 판과 동일한 출력 shape (UI 는 mongodb · SQL 구분 없이 columns 배열만 렌더).
 
 export interface Column {
@@ -31,78 +31,76 @@ function fallbackColumn(key: string): Column {
   };
 }
 
-function columnFromSchemaField(key: string, schema: TableSchema, fieldName: string = key): Column | null {
-  // 정확한 이름 우선, 없으면 대소문자 무시 (Oracle 대문자 컬럼 · MSSQL case-insensitive collation)
-  let field = schema.byName.get(fieldName);
-  if (!field) {
-    const lower = fieldName.toLowerCase();
-    field = schema.fields.find((f) => f.key.toLowerCase() === lower);
-  }
-  if (!field) return null;
-  return {
-    key,
-    label: field.label,
-    type: field.type,
-    source: schema.name,
-  };
+// 스키마 컬럼명은 LLM 이 쓴 대소문자 그대로라 결과 key (Oracle 은 대문자) 와 다를 수 있음 → 대소문자 무시 재시도
+function findField(schema: TableSchema, name: string): FieldSchema | undefined {
+  const exact = schema.byName.get(name);
+  if (exact) return exact;
+  const lower = name.toLowerCase();
+  return schema.fields.find((f) => f.key.toLowerCase() === lower);
 }
 
-interface ResolvedTable {
-  ref: TableRef;
+interface FieldHit {
+  field: FieldSchema;
   schema: TableSchema;
 }
 
-function resolveTables(analysis: SqlAnalysis): ResolvedTable[] {
-  const resolved: ResolvedTable[] = [];
-  // self-join 처럼 같은 테이블이 여러 별칭으로 나와도 별칭 조회가 되도록 ref 마다 유지 (탐색 순서는 mapKey 에서 dedupe)
-  for (const ref of analysis.tables ?? []) {
-    const schema = getSchema(ref.name);
-    if (schema) resolved.push({ ref, schema });
-  }
-  return resolved;
+const MAX_DEPTH = 8;
+
+function resolveInSource(source: SqlSource, col: string, depth: number): FieldHit | null {
+  if (source.sub) return resolveInQuery(source.sub, col, depth + 1);
+  if (!source.table) return null;
+  const schema = getSchema(source.table);
+  const field = schema ? findField(schema, col) : undefined;
+  return schema && field ? { field, schema } : null;
 }
 
-// `c.text` 의 qualifier `c` 를 별칭 → 테이블명(전체 · 마지막 segment) 순으로 찾는다
-function schemaForQualifier(qualifier: string, tables: ResolvedTable[]): TableSchema | undefined {
-  const q = qualifier.toLowerCase();
-  const byAlias = tables.find((t) => t.ref.alias?.toLowerCase() === q);
-  if (byAlias) return byAlias.schema;
-  const byName = tables.find((t) => {
-    const name = t.ref.name.toLowerCase();
-    return name === q || name.split('.').pop() === q;
-  });
-  return byName?.schema;
-}
-
-function uniqueSchemas(schemas: (TableSchema | undefined)[]): TableSchema[] {
-  const out: TableSchema[] = [];
-  for (const s of schemas) {
-    if (s && !out.includes(s)) out.push(s);
-  }
-  return out;
-}
-
-function mapKey(key: string, analysis: SqlAnalysis, tables: ResolvedTable[]): Column | null {
-  const lowerKey = key.toLowerCase();
-  const item = (analysis.selectItems ?? []).find((it) => it.outputKey === key)
-    ?? (analysis.selectItems ?? []).find((it) => it.outputKey.toLowerCase() === lowerKey);
-
-  // 1) SELECT 목록에 c.col [AS key] 로 명시 → 해당 테이블의 원본 컬럼
-  if (item?.qualifier) {
-    const schema = schemaForQualifier(item.qualifier, tables);
-    const mapped = schema ? columnFromSchemaField(key, schema, item.column) : null;
-    if (mapped) return mapped;
-  }
-
-  // 2) SELECT c.* 처럼 별칭 명시된 테이블 → base → JOIN · 서브쿼리 테이블 순
-  const starSchemas = (analysis.starQualifiers ?? []).map((q) => schemaForQualifier(q, tables));
-  const ordered = uniqueSchemas([...starSchemas, ...tables.map((t) => t.schema)]);
-  const fieldName = item ? item.column : key;
-  for (const schema of ordered) {
-    const mapped = columnFromSchemaField(key, schema, fieldName);
-    if (mapped) return mapped;
+function firstHit(sources: SqlSource[], col: string, depth: number): FieldHit | null {
+  for (const source of sources) {
+    const hit = resolveInSource(source, col, depth);
+    if (hit) return hit;
   }
   return null;
+}
+
+// `c.name` · `c.*` 의 qualifier 가 가리키는 소스 (별칭 또는 테이블명으로 매칭)
+function sourcesFor(query: QueryInfo, qual: string): SqlSource[] {
+  const qualLast = qual.split('.').pop();
+  return query.sources.filter(
+    (s) =>
+      s.alias === qual ||
+      (s.table !== null && (s.table.toLowerCase() === qual || s.table.toLowerCase().split('.').pop() === qualLast)),
+  );
+}
+
+// 결과 key 가 어느 테이블의 어떤 컬럼에서 왔는지 SELECT 목록 → FROM/JOIN 소스 순으로 추적
+function resolveInQuery(query: QueryInfo, key: string, depth: number): FieldHit | null {
+  if (depth > MAX_DEPTH) return null;
+  if (!query.items) return firstHit(query.sources, key, depth);
+
+  const lower = key.toLowerCase();
+  const item = query.items.find((it) => !it.star && it.key !== null && it.key.toLowerCase() === lower);
+  if (item) {
+    // 표현식 (COUNT(*) AS cnt 등) 은 스키마 컬럼이 아님
+    if (!item.col) return null;
+    return firstHit(item.qual ? sourcesFor(query, item.qual) : query.sources, item.col, depth);
+  }
+
+  for (const star of query.items.filter((it) => it.star)) {
+    const hit = firstHit(star.qual ? sourcesFor(query, star.qual) : query.sources, key, depth);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function columnFor(key: string, analysis: SqlAnalysis): Column | null {
+  const hit = analysis.query ? resolveInQuery(analysis.query, key, 0) : null;
+  if (!hit) return null;
+  return {
+    key,
+    label: hit.field.label,
+    type: hit.field.type,
+    source: hit.schema.name,
+  };
 }
 
 function collectRowKeys(rows: Record<string, unknown>[]): string[] {
@@ -121,35 +119,35 @@ function collectRowKeys(rows: Record<string, unknown>[]): string[] {
   return order;
 }
 
+// rows 가 비었을 때 헤더로 쓸 key 목록: SELECT 목록이 명시 컬럼뿐이면 그 순서, 아니면 기준 테이블 스키마 순서
+function headerKeys(analysis: SqlAnalysis): string[] {
+  const items = analysis.query?.items;
+  if (items && items.length > 0 && items.every((it) => !it.star && it.key !== null)) {
+    return items.map((it) => it.key as string).filter((key) => !SENSITIVE_KEYS.has(key));
+  }
+  const baseSchema = analysis.baseTableRef ? getSchema(analysis.baseTableRef) : undefined;
+  return baseSchema ? baseSchema.fields.map((f) => f.key) : [];
+}
+
 /**
  * SQL SELECT 결과 rows 에 대해 columns 배열을 조립.
  *
- * - 결과 컬럼마다 SELECT 목록의 별칭 힌트 → base → JOIN · 서브쿼리 테이블 스키마 순으로 매칭
- * - rows 가 비어있고 base table schema 를 알면 → schema 순서대로 컬럼 노출 (빈 표 헤더 렌더용)
- * - 어느 스키마에도 없는 key 가 있거나 스키마를 하나도 못 찾으면 → partial confidence
+ * - 각 key 는 SELECT 목록의 qualifier (alias.col · alias.*) 로 소스 테이블을 찾아 매칭.
+ *   qualifier 가 없으면 FROM → JOIN 순서로 처음 매칭되는 테이블. CTE · 서브쿼리는 재귀 추적
+ * - rows 가 비어있으면 → headerKeys 로 컬럼 노출 (빈 표 헤더 렌더용)
+ * - 어느 스키마에도 없는 key (표현식 · 집계 등) 가 있거나 컬럼을 하나도 못 만들면 → partial confidence
  */
 export function buildColumnsFromSql(
   rows: Record<string, unknown>[],
   analysis: SqlAnalysis,
 ): ColumnsResult {
-  const tables = resolveTables(analysis);
-  const baseSchema = tables.find((t) => t.ref === analysis.tables[0])?.schema;
-
-  // 렌더할 key 목록 결정
-  let keys: string[];
-  if (rows.length > 0) {
-    keys = collectRowKeys(rows);
-  } else if (baseSchema) {
-    keys = baseSchema.fields.map((f) => f.key);
-  } else {
-    keys = [];
-  }
+  const keys = rows.length > 0 ? collectRowKeys(rows) : headerKeys(analysis);
 
   const columns: Column[] = [];
   const unmapped: string[] = [];
 
   for (const key of keys) {
-    const mapped = mapKey(key, analysis, tables);
+    const mapped = columnFor(key, analysis);
     if (mapped) {
       columns.push(mapped);
     } else {
@@ -158,8 +156,7 @@ export function buildColumnsFromSql(
     }
   }
 
-  const confidence: 'full' | 'partial' =
-    unmapped.length > 0 || tables.length === 0 ? 'partial' : 'full';
+  const confidence: 'full' | 'partial' = unmapped.length > 0 || columns.length === 0 ? 'partial' : 'full';
 
   return { columns, columnConfidence: confidence, unmappedKeys: unmapped };
 }

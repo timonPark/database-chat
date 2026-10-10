@@ -16,7 +16,7 @@
 
 | ID | 등급 | 원인 분류 | 판단 · 조치 |
 |---|---|---|---|
-| TC-10 | ⚠️ | LLM 쿼리 (CONCAT 계산 컬럼) | 정상 — 관리자 이름을 `CONCAT(st.first_name, ' ', st.last_name) AS manager_name` 으로 합쳐 미매칭(partial). 나머지 컬럼은 `store_id→store` · `address/district/postal_code/phone→address` 로 올바르게 매칭 |
+| TC-10 | ⚠️ | LLM 쿼리 (CONCAT 계산 컬럼) | 정상 — 관리자 이름을 `CONCAT(st.first_name, ' ', st.last_name) AS manager_name` 으로 합쳐 미매칭(partial). 나머지 컬럼은 `store_id→store` · `address/district/postal_code/phone→address` 로 올바르게 매칭. 재실행 3회: ✅ 2 · ⚠️ 1 — 원본 컬럼(`first_name`)을 조회하면 PASS, CONCAT 이면 REVIEW |
 
 ## 실행기 보고서
 

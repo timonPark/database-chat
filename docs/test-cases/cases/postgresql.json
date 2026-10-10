@@ -25,7 +25,7 @@
     { "id": "TC-09", "category": "JOIN · 동명 컬럼", "question": "영화 제목과 언어 보여줘", "expectedSql": "SELECT f.title, l.name FROM film f JOIN language l ON l.language_id = f.language_id",
       "expect": { "confidence": "full", "tables": ["film", "language"], "sources": { "title": "film", "name": "language" } } },
     { "id": "TC-10", "category": "JOIN · 동명 컬럼", "question": "매장별 관리자 이름과 매장 주소 알려줘", "expectedSql": "SELECT s.store_id, st.first_name, st.last_name, ad.address FROM store s JOIN staff st ON st.staff_id = s.manager_staff_id JOIN address ad ON ad.address_id = s.address_id",
-      "expect": { "confidence": "full", "tables": ["store", "staff", "address"], "sources": { "first_name": "staff", "address": "address" } } },
+      "expect": { "confidence": "full", "tables": ["store", "staff", "address", "city", "country"], "sources": { "first_name": "staff", "address": "address" } } },
     { "id": "TC-11", "category": "JOIN", "question": "최근 결제 내역을 고객 이름과 같이 보여줘", "expectedSql": "SELECT p.payment_id, p.amount, p.payment_date, c.first_name, c.last_name FROM payment p JOIN customer c ON c.customer_id = p.customer_id ORDER BY p.payment_date DESC",
       "expect": { "confidence": "full", "tables": ["payment", "customer"], "sources": { "amount": "payment", "first_name": "customer" } } },
     { "id": "TC-12", "category": "집계", "question": "등급별 영화 수 알려줘", "expectedSql": "SELECT rating, COUNT(*) AS film_count FROM film GROUP BY rating",

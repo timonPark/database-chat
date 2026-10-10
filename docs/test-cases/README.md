@@ -119,7 +119,7 @@ curl -s http://localhost:3111/db-query -H 'Content-Type: application/json' \
 | PostgreSQL | #192 | #197 | 전부 허용 | |
 | Oracle | #193 | #198 | 전부 허용 | |
 | MSSQL | #194 | #199 | 전부 허용 | 민감 컬럼 노출 (아래 알려진 문제) |
-| MongoDB | #195 | #200 | 해당 없음 | Mac 결과: [claude](results/mac-claude-mongodb.md) · [codex](results/mac-codex-mongodb.md) · [gemini](results/mac-gemini-mongodb.md) |
+| MongoDB | #195 | #200 | 해당 없음 | Windows 결과: [claude](results/windows-claude-mongodb.md) · [codex](results/windows-codex-mongodb.md) · [gemini](results/windows-gemini-mongodb.md) / Mac 결과: [claude](results/mac-claude-mongodb.md) · [codex](results/mac-codex-mongodb.md) · [gemini](results/mac-gemini-mongodb.md) |
 
 - **CTE 케이스**는 템플릿의 `ALLOWED_SQL_PREFIXES` 에 따라 기대 결과가 다릅니다. `--project` 를 주면 실행기가 자동으로 판정합니다 (미허용 템플릿은 400 거부가 PASS)
 - **Mac SQL 4종 (#196 ~ #199)** 은 #178 (mac 결과 컬럼 매칭 수정) 머지 후 진행합니다. 그 전에는 JOIN · 따옴표 · CTE 케이스가 실패합니다

@@ -30,7 +30,8 @@ console.error(`컬렉션 ${allCols.length}개 발견 (view/system ${skipped}개 
 const startedAt = Date.now();
 
 function inferType(value: unknown): string {
-  if (value === null) return 'null';
+  // 샘플 값이 null 이면 타입을 알 수 없다. 'null' 을 타입으로 쓰면 ERD 에서 "null" 로 quote 돼 Mermaid 파스 에러 (#112)
+  if (value === null) return 'unknown';
   if (Array.isArray(value)) return 'array';
   if (value instanceof Date) return 'date';
   if (typeof value === 'object' && value !== null) {
@@ -96,7 +97,7 @@ for (let i = 0; i < cols.length; i++) {
     : [];
 
   // 필드 순서: 첫 등장 순 (첫 문서 필드 순서 우선, 이후 문서의 새 필드는 뒤에 append).
-  // 타입: 첫 non-null 관측값 사용. null 만 관측된 필드는 'null' 로 남김.
+  // 타입: 첫 non-null 관측값 사용. null 만 관측된 필드는 'unknown' 으로 남김.
   const fieldOrder: string[] = [];
   const fieldTypes: Map<string, string> = new Map();
   for (const doc of samples) {
@@ -105,7 +106,7 @@ for (let i = 0; i < cols.length; i++) {
       if (!fieldTypes.has(k)) {
         fieldOrder.push(k);
         fieldTypes.set(k, inferType(v));
-      } else if (fieldTypes.get(k) === 'null' && v !== null) {
+      } else if (fieldTypes.get(k) === 'unknown' && v !== null) {
         fieldTypes.set(k, inferType(v));
       }
     }

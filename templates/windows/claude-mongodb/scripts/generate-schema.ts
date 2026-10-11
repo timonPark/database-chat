@@ -111,8 +111,8 @@ async function fetchModels(): Promise<string[]> {
 
   // 크롤 실패 시 alias 3개 (CLI 가 alias 를 latest 로 항상 resolve)
   if (models.length === 0) models = ['haiku', 'sonnet', 'opus'];
-  // default 가 리스트에 없으면 맨 앞에 추가 (사용자가 default 를 놓치지 않도록)
-  if (!models.includes(DEFAULT_MODEL)) models.unshift(DEFAULT_MODEL);
+  // 기본 모델을 항상 1번에 두어 Enter(default=1) 가 (default) 표시된 모델을 고르게 한다 (#177).
+  models = [DEFAULT_MODEL, ...models.filter((m) => m !== DEFAULT_MODEL)];
   return models;
 }
 

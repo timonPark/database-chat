@@ -6,7 +6,7 @@
     "tables": ["actor", "address", "category", "city", "country", "customer", "film", "film_actor", "film_category", "inventory", "language", "payment", "rental", "staff", "store"]
   },
   "chat": [
-    { "id": "TC-01", "category": "회귀", "question": "영화 목록 5개 보여줘", "expectedSql": "SELECT * FROM film LIMIT 5",
+    { "id": "TC-01", "category": "회귀", "question": "영화 목록 보여줘", "expectedSql": "SELECT * FROM film",
       "expect": { "confidence": "full", "tables": ["film"] } },
     { "id": "TC-02", "category": "회귀", "question": "R 등급 영화 중 상영시간이 긴 순서로 제목이랑 상영시간 보여줘", "expectedSql": "SELECT title, length, rating FROM film WHERE rating = 'R' ORDER BY length DESC",
       "expect": { "confidence": "full", "tables": ["film"], "sources": { "title": "film", "length": "film" } } },

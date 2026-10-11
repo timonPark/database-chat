@@ -88,6 +88,7 @@ ${collectionsBlock}
   (mapping 의 "주요 필드" 만으로 제한하지 말 것)
 - 필드 타입은 collections/*.md 의 실제 타입을 그대로 사용
   (소문자 위주: \`string\`, \`number\`, \`array\`, \`object\`, \`date\`, \`boolean\`, \`ObjectId\`, \`decimal128\`, \`binary\` 등)
+- 타입 토큰은 절대 따옴표로 감싸지 마세요 (Mermaid 는 따옴표 문자열을 주석으로 읽어 파스 에러). 타입이 \`null\` 이거나 확실하지 않으면 \`unknown\` 으로 표기
 - 필드 이름의 공백은 언더스코어로 치환 (Mermaid 는 공백 있는 필드명을 허용하지 않음)
   예: \`start station id\` → \`start_station_id\`
 

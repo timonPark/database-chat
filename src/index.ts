@@ -282,6 +282,15 @@ async function copySeedFile(src: string, dest: string, keepExisting: boolean): P
   await cp(src, dest);
 }
 
+/**
+ * seeds 의 provider 전용 스크립트 경로. `<name>.<provider>.ts` 가 있으면 그것을, 없으면 `<name>.ts` (Claude) 를 쓴다.
+ * Why (#176): mongodb generate-index · generate-erd 는 LLM CLI 를 직접 호출하므로 provider 마다 구현이 다르다.
+ */
+function seedFileForProvider(database: string, name: string, provider: string): string {
+  const specific = path.join(SEEDS_DIR, database, `${name}.${provider}.ts`);
+  return existsSync(specific) ? specific : path.join(SEEDS_DIR, database, `${name}.ts`);
+}
+
 function hasNodeSchemaScript(targetDir: string): boolean {
   return existsSync(path.join(targetDir, 'scripts', 'generate-schema.ts'));
 }
@@ -304,7 +313,7 @@ async function generateSchemaScript(
 
   // MongoDB: index.md / collection-mapping.md 를 deterministic 하게 조립하는 스크립트
   if (database === 'mongodb') {
-    const indexGenSrc = path.join(SEEDS_DIR, database, 'generate-index.ts');
+    const indexGenSrc = seedFileForProvider(database, 'generate-index', provider);
     if (existsSync(indexGenSrc)) {
       await copySeedFile(indexGenSrc, path.join(scriptsDir, 'generate-index.ts'), keep);
     }
@@ -1077,9 +1086,10 @@ async function addSchemaToPackageScripts(targetDir: string): Promise<void> {
 async function generateErdScript(
   targetDir: string,
   database: string,
+  provider: string,
   opts: { keepExisting?: boolean } = {},
 ): Promise<void> {
-  const erdSrc = path.join(SEEDS_DIR, database, 'generate-erd.ts');
+  const erdSrc = seedFileForProvider(database, 'generate-erd', provider);
   if (!existsSync(erdSrc)) return;
   const scriptsDir = path.join(targetDir, 'scripts');
   await mkdir(scriptsDir, { recursive: true });
@@ -1974,7 +1984,7 @@ async function main(): Promise<void> {
       await generateMinimalPackageJson(targetDir, database, projectName);
       await generateEnvExample(targetDir, database);
       await generateSchemaScript(targetDir, database, provider);
-      await generateErdScript(targetDir, database);
+      await generateErdScript(targetDir, database, provider);
       await generateReadme(targetDir, projectName, provider, database, dbMode, withSeed, 'npm', false);
       await generateInstallScripts(targetDir, projectName, provider, database, dbMode);
       await generateStartScripts(targetDir, projectName);
@@ -2139,7 +2149,7 @@ async function main(): Promise<void> {
   }
 
   // generate-erd.ts 복사 + package.json에 erd 스크립트 추가
-  await generateErdScript(targetDir, database, { keepExisting: isWindowsTemplate });
+  await generateErdScript(targetDir, database, provider, { keepExisting: isWindowsTemplate });
   await addErdToPackageScripts(targetDir);
 
   // README.md 생성

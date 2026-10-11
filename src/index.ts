@@ -521,19 +521,13 @@ _MODELS=()
 
 ${modelQuery}
 
-# 조회 결과가 없으면 default 하나만 후보로 둔다.
-if [ \${#_MODELS[@]} -eq 0 ]; then
-  _MODELS+=("\$_DEFAULT_MODEL")
-else
-  # 조회 성공했는데 default 가 리스트에 없으면 맨 앞에 추가 (default 마커 유지 · 사용자가 default 를 놓치지 않도록)
-  _has_default=0
-  for _m in "\${_MODELS[@]}"; do
-    [ "\$_m" = "\$_DEFAULT_MODEL" ] && _has_default=1
-  done
-  if [ "\$_has_default" -eq 0 ]; then
-    _MODELS=("\$_DEFAULT_MODEL" "\${_MODELS[@]}")
-  fi
-fi
+# 기본 모델을 항상 1번에 두고 나머지에서 중복을 뺀다 — Enter(default=1) 가 (default) 표시된 모델을 고르도록 (#177).
+# 조회 결과가 없으면 default 하나만 후보가 된다. (set -u: 빈 배열 전개는 \${arr[@]+...} 로 감싼다)
+_ORDERED=("\$_DEFAULT_MODEL")
+for _m in \${_MODELS[@]+"\${_MODELS[@]}"}; do
+  if [ "\$_m" != "\$_DEFAULT_MODEL" ]; then _ORDERED+=("\$_m"); fi
+done
+_MODELS=("\${_ORDERED[@]}")
 
 echo "사용할 AI 모델을 선택하세요:"
 _idx=0

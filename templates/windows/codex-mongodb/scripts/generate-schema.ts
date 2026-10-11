@@ -171,8 +171,8 @@ async function main(): Promise<void> {
   };
 
   let models = fetchModelsFromCache();
-  if (models.length === 0) models = [DEFAULT_MODEL];
-  else if (!models.includes(DEFAULT_MODEL)) models.unshift(DEFAULT_MODEL);
+  // 기본 모델을 항상 1번에 두어 Enter(default=1) 가 (default) 표시된 모델을 고르게 한다 (#177).
+  models = [DEFAULT_MODEL, ...models.filter((m) => m !== DEFAULT_MODEL)];
   console.log('사용할 AI 모델을 선택하세요:');
   models.forEach((m, i) => console.log(`  ${i + 1}) ${m}${m === DEFAULT_MODEL ? ' (default)' : ''}`));
   const max = models.length + 1;

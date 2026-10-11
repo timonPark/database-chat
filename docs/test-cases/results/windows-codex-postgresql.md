@@ -22,7 +22,7 @@
 
 `node docs/test-cases/run-cases.mjs --db postgresql --project codex-postgresql --out docs/test-cases/results/windows-codex-postgresql.md`
 
-- 실행: 2026-10-11T09:32:51.548Z · OS: win32 · 서버: http://localhost:3111
+- 실행: 2026-10-11T10:16:48.995Z · OS: win32 · 서버: http://localhost:3111
 - 설치 폴더: `C:\database-chat\codex-postgresql` · provider: codex · 모델: gpt-5.6-luna · WITH 허용: true
 - 샘플 데이터: dvdrental
 - 결과: ✅ 26 · ⚠️ 0 · ❌ 0 (총 26)
@@ -52,8 +52,8 @@
 | TC-09 | JOIN · 동명 컬럼 | ✅ | full |  |  |
 | TC-10 | JOIN · 동명 컬럼 | ✅ | full |  |  |
 | TC-11 | JOIN | ✅ | full |  |  |
-| TC-12 | 집계 | ✅ | partial | count |  |
-| TC-13 | 집계 · JOIN | ✅ | partial | count |  |
+| TC-12 | 집계 | ✅ | partial | film_count |  |
+| TC-13 | 집계 · JOIN | ✅ | partial | film_count |  |
 | TC-14 | 결과 0건 | ✅ | full |  |  |
 
 ## 상세
@@ -107,7 +107,7 @@
 - 컬럼: staff_id→staff, first_name→staff, last_name→staff, address_id→staff, email→staff, store_id→staff, active→staff, username→staff, last_update→staff, picture→staff
 
 ### TC-01 ✅ 회귀
-- 질문: 영화 목록 5개 보여줘
+- 질문: 영화 목록 보여줘
 - 실행 쿼리: `SELECT film_id, title, description, release_year, language_id, rental_duration, rental_rate, length, rating FROM public.film ORDER BY film_id LIMIT 20`
 - 컬럼: film_id→film, title→film, description→film, release_year→film, language_id→film, rental_duration→film, rental_rate→film, length→film, rating→film
 
@@ -123,12 +123,12 @@
 
 ### TC-04 ✅ 회귀 · 서브쿼리
 - 질문: 재고가 하나도 없는 영화 알려줘
-- 실행 쿼리: `SELECT f.film_id, f.title FROM public.film AS f LEFT JOIN public.inventory AS i ON f.film_id = i.film_id WHERE i.inventory_id IS NULL ORDER BY f.film_id LIMIT 20`
-- 컬럼: film_id→film, title→film
+- 실행 쿼리: `SELECT f.film_id, f.title, f.description, f.release_year, f.language_id, f.rental_duration, f.rental_rate, f.length, f.rating FROM public.film AS f WHERE NOT EXISTS (SELECT 1 FROM public.inventory AS i WHERE i.film_id = f.film_id) ORDER BY f.title LIMIT 20`
+- 컬럼: film_id→film, title→film, description→film, release_year→film, language_id→film, rental_duration→film, rental_rate→film, length→film, rating→film
 
 ### TC-05 ✅ JOIN
 - 질문: 배우 Penelope Guiness 가 출연한 영화 제목 알려줘
-- 실행 쿼리: `SELECT f.title FROM public.film AS f JOIN public.film_actor AS t1 ON f.film_id = t1.film_id JOIN public.actor AS t2 ON t1.actor_id = t2.actor_id WHERE t2.first_name = 'Penelope' AND t2.last_name = 'Guiness' ORDER BY f.title LIMIT 20`
+- 실행 쿼리: `SELECT f.title FROM public.film AS f JOIN public.film_actor AS fa ON f.film_id = fa.film_id JOIN public.actor AS a ON fa.actor_id = a.actor_id WHERE a.first_name = 'Penelope' AND a.last_name = 'Guiness' ORDER BY f.title LIMIT 20`
 - 컬럼: title→film
 
 ### TC-06 ✅ JOIN · 동명 컬럼
@@ -148,30 +148,30 @@
 
 ### TC-09 ✅ JOIN · 동명 컬럼
 - 질문: 영화 제목과 언어 보여줘
-- 실행 쿼리: `SELECT f.title, l.name FROM public.film AS f JOIN public.language AS l ON f.language_id = l.language_id LIMIT 20`
+- 실행 쿼리: `SELECT t1.title, t2.name FROM public.film AS t1 JOIN public.language AS t2 ON t1.language_id = t2.language_id LIMIT 20`
 - 컬럼: title→film, name→language
 
 ### TC-10 ✅ JOIN · 동명 컬럼
 - 질문: 매장별 관리자 이름과 매장 주소 알려줘
-- 실행 쿼리: `SELECT s.store_id, st.first_name, st.last_name, a.address, a.address2, a.district, a.postal_code, a.phone FROM public.store AS s JOIN public.staff AS st ON s.manager_staff_id = st.staff_id JOIN public.address AS a ON s.address_id = a.address_id ORDER BY s.store_id LIMIT 20`
+- 실행 쿼리: `SELECT s.store_id, t1.first_name, t1.last_name, t2.address, t2.address2, t2.district, t2.postal_code, t2.phone FROM public.store AS s JOIN public.staff AS t1 ON s.manager_staff_id = t1.staff_id JOIN public.address AS t2 ON s.address_id = t2.address_id ORDER BY s.store_id LIMIT 20`
 - 컬럼: store_id→store, first_name→staff, last_name→staff, address→address, address2→address, district→address, postal_code→address, phone→address
 
 ### TC-11 ✅ JOIN
 - 질문: 최근 결제 내역을 고객 이름과 같이 보여줘
-- 실행 쿼리: `SELECT p.payment_id, p.customer_id, p.staff_id, p.rental_id, p.amount, p.payment_date, c.first_name, c.last_name FROM public.payment AS p JOIN public.customer AS c ON p.customer_id = c.customer_id ORDER BY p.payment_date DESC LIMIT 20`
+- 실행 쿼리: `SELECT t1.payment_id, t1.customer_id, t1.staff_id, t1.rental_id, t1.amount, t1.payment_date, t2.first_name, t2.last_name FROM public.payment AS t1 JOIN public.customer AS t2 ON t1.customer_id = t2.customer_id ORDER BY t1.payment_date DESC LIMIT 20`
 - 컬럼: payment_id→payment, customer_id→payment, staff_id→payment, rental_id→payment, amount→payment, payment_date→payment, first_name→customer, last_name→customer
 
 ### TC-12 ✅ 집계
 - 질문: 등급별 영화 수 알려줘
-- 실행 쿼리: `SELECT f.rating, COUNT(*) FROM public.film AS f GROUP BY f.rating ORDER BY COUNT(*) DESC LIMIT 20`
-- 컬럼: rating→film, count→미매칭
+- 실행 쿼리: `SELECT rating, COUNT(*) AS film_count FROM public.film GROUP BY rating ORDER BY rating LIMIT 20`
+- 컬럼: rating→film, film_count→미매칭
 
 ### TC-13 ✅ 집계 · JOIN
 - 질문: 장르별 영화 수 많은 순으로 보여줘
-- 실행 쿼리: `SELECT t1.name, COUNT(t2.film_id) FROM public.category AS t1 JOIN public.film_category AS t2 ON t1.category_id = t2.category_id GROUP BY t1.category_id, t1.name ORDER BY COUNT(t2.film_id) DESC LIMIT 20`
-- 컬럼: name→category, count→미매칭
+- 실행 쿼리: `SELECT c.name, COUNT(fc.film_id) AS film_count FROM public.category AS c JOIN public.film_category AS fc ON c.category_id = fc.category_id GROUP BY c.category_id, c.name ORDER BY film_count DESC LIMIT 20`
+- 컬럼: name→category, film_count→미매칭
 
 ### TC-14 ✅ 결과 0건
 - 질문: 2030년에 개봉한 영화 제목 보여줘
-- 실행 쿼리: `SELECT f.title FROM public.film AS f WHERE f.release_year = 2030 LIMIT 20`
+- 실행 쿼리: `SELECT title FROM public.film WHERE release_year = 2030 LIMIT 20`
 - 컬럼: title→film

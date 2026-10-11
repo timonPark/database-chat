@@ -9,7 +9,7 @@
 
 | ID | 구분 | 질문 | 예상 쿼리 | 기대 |
 |---|---|---|---|---|
-| TC-01 | 회귀 | 영화 목록 5개 보여줘 | `SELECT * FROM film LIMIT 5` | `full` · 매칭 테이블 ⊂ {film} |
+| TC-01 | 회귀 | 영화 목록 보여줘 | `SELECT * FROM film` | `full` · 매칭 테이블 ⊂ {film} |
 | TC-02 | 회귀 | R 등급 영화 중 상영시간이 긴 순서로 제목이랑 상영시간 보여줘 | `SELECT title, length, rating FROM film WHERE rating = 'R' ORDER BY length DESC` | `full` · title→film, length→film · 매칭 테이블 ⊂ {film} |
 | TC-03 | 회귀 · 민감 컬럼 | 직원 정보 전부 보여줘 | `SELECT * FROM staff` | `full` · 매칭 테이블 ⊂ {staff} · password 미노출 |
 | TC-04 | 회귀 · 서브쿼리 | 재고가 하나도 없는 영화 알려줘 | `SELECT f.film_id, f.title FROM film f WHERE f.film_id NOT IN (SELECT i.film_id FROM inventory i)` | `full` · title→film · 매칭 테이블 ⊂ {film, inventory} |

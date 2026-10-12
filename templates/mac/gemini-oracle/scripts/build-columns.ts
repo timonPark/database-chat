@@ -18,9 +18,19 @@ export interface ColumnsResult {
   unmappedKeys: string[];
 }
 
-// 어떤 SQL DB 든 password · pwd · pass_hash 등 민감 컬럼은 클라이언트로 노출 금지.
-// (테이블에 이런 컬럼이 있고 SELECT * 결과에 포함되어도 UI 컬럼에서 제외)
-const SENSITIVE_KEYS = new Set<string>(['password', 'passHash', 'pass_hash', 'pwd']);
+// 어떤 SQL DB 든 비밀번호 · 비밀키 계열 민감 컬럼은 클라이언트로 노출 금지.
+// (테이블에 이런 컬럼이 있고 SELECT * 결과에 포함되어도 결과 rows · UI 컬럼에서 제외 — server.ts 도 이 판정을 씀)
+// - 이 문자열이 들어 있으면 민감: PasswordHash · PasswordSalt · user_password · pass_hash · PASSWD
+// - 이 단어가 따로 있을 때만 민감: client_secret · SecretKey · PWD (Secretary 같은 이름은 제외)
+const SENSITIVE_SUBSTRINGS = ['password', 'passwd', 'passhash'];
+const SENSITIVE_WORDS = new Set<string>(['pwd', 'secret']);
+
+export function isSensitiveColumn(key: string): boolean {
+  const flat = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (SENSITIVE_SUBSTRINGS.some((s) => flat.includes(s))) return true;
+  const words = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/);
+  return words.some((w) => SENSITIVE_WORDS.has(w));
+}
 
 function fallbackColumn(key: string): Column {
   return {
@@ -133,7 +143,7 @@ function collectRowKeys(rows: Record<string, unknown>[]): string[] {
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
     for (const key of Object.keys(row)) {
-      if (SENSITIVE_KEYS.has(key)) continue;
+      if (isSensitiveColumn(key)) continue;
       if (!seen.has(key)) {
         seen.add(key);
         order.push(key);
@@ -147,7 +157,7 @@ function collectRowKeys(rows: Record<string, unknown>[]): string[] {
 function headerKeys(analysis: SqlAnalysis): string[] {
   const items = analysis.query?.items;
   if (items && items.length > 0 && items.every((it) => !it.star && it.key !== null)) {
-    return items.map((it) => it.key as string).filter((key) => !SENSITIVE_KEYS.has(key));
+    return items.map((it) => it.key as string).filter((key) => !isSensitiveColumn(key));
   }
   const baseSchema = analysis.baseTableRef ? getSchema(analysis.baseTableRef) : undefined;
   return baseSchema ? baseSchema.fields.map((f) => f.key) : [];

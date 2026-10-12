@@ -9,7 +9,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { loadAllSchemas } from './scripts/load-schema-index.js';
 import { analyzeSql } from './scripts/sql-analyze.js';
-import { buildColumnsFromSql } from './scripts/build-columns.js';
+import { buildColumnsFromSql, isSensitiveColumn } from './scripts/build-columns.js';
 
 // ── 환경 변수 ──────────────────────────────────────────────────────────────────
 
@@ -166,7 +166,7 @@ ${buildTableSummary()}
 ${buildTableGuide()}
 
 규칙:
-- password · pass_hash · passwd · pwd · secret 컬럼은 반드시 제외
+- 이름에 password · passwd · pwd · secret 이 들어간 컬럼 (PasswordHash · PasswordSalt · user_password 등) 은 반드시 제외
 - SELECT · WITH · EXPLAIN PLAN FOR · SHOW · DESCRIBE · DESC 만 허용 (DML/DDL 절대 금지)
 - **LIMIT 문법 없음** — 반드시 \`FETCH FIRST ${limit} ROWS ONLY\` (12c+) 또는 \`WHERE ROWNUM <= ${limit}\` (레거시) 사용
 - ORDER BY 와 FETCH FIRST 는 함께 (ORDER BY 없이 FETCH 는 결과 순서 비결정)
@@ -187,7 +187,6 @@ ${message}`;
 
 const ALLOWED_SQL_PREFIXES: string[] = ['SELECT', 'WITH', 'EXPLAIN', 'SHOW', 'DESCRIBE', 'DESC'];
 const BLOCKED_SQL_KEYWORDS: RegExp = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|REPLACE|MERGE|EXEC|EXECUTE|CALL|GRANT|REVOKE|BEGIN|DECLARE)\b/i;
-const SENSITIVE_COLUMNS: string[] = ['password', 'pass_hash', 'passwd', 'pwd', 'secret'];
 
 function validateSql(sqlStr: string): void {
   const trimmed: string = sqlStr.trim().toUpperCase();
@@ -225,7 +224,7 @@ function removeSensitiveColumns(data: Record<string, unknown>[]): Record<string,
   return data.map((row) => {
     const cleaned: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(row)) {
-      if (!SENSITIVE_COLUMNS.includes(key.toLowerCase())) cleaned[key] = value;
+      if (!isSensitiveColumn(key)) cleaned[key] = value;
     }
     return cleaned;
   });

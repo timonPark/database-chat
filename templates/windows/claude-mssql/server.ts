@@ -10,7 +10,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { loadAllSchemas } from './scripts/load-schema-index.js';
 import { analyzeSql } from './scripts/sql-analyze.js';
-import { buildColumnsFromSql } from './scripts/build-columns.js';
+import { buildColumnsFromSql, isSensitiveColumn } from './scripts/build-columns.js';
 
 // Windows: import.meta.dirname 미지원 → fileURLToPath 로 파생
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -175,7 +175,7 @@ ${buildTableSummary()}
 ${buildTableGuide()}
 
 규칙:
-- password · pass_hash · passwd · pwd · secret 컬럼은 반드시 SELECT 에서 제외
+- 이름에 password · passwd · pwd · secret 이 들어간 컬럼 (PasswordHash · PasswordSalt · user_password 등) 은 반드시 SELECT 에서 제외
 - SELECT · EXPLAIN · SHOW · DESCRIBE · DESC 만 허용 (INSERT · UPDATE · DELETE · DROP · ALTER · CREATE · TRUNCATE · REPLACE · MERGE · EXEC · EXECUTE · CALL · GRANT · REVOKE · BULK 절대 금지)
 - **반드시 스키마 포함 테이블명 사용** (예: SalesLT.Product, dbo.ErrorLog) — 스키마 없이 쓰면 오류
 - **LIMIT 문법 없음** — 상위 N 은 \`SELECT TOP ${limit} ...\` 또는 \`OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY\` (ORDER BY 필수)
@@ -189,7 +189,6 @@ ${buildTableGuide()}
 
 const ALLOWED_SQL_PREFIXES: string[] = ['SELECT', 'WITH', 'EXPLAIN', 'SHOW', 'DESCRIBE', 'DESC'];
 const BLOCKED_SQL_KEYWORDS: RegExp = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|REPLACE|MERGE|EXEC|EXECUTE|CALL|GRANT|REVOKE|BULK\s+INSERT|INTO\s+OUTFILE|INTO\s+DUMPFILE)\b/i;
-const SENSITIVE_COLUMNS: string[] = ['password', 'pass_hash', 'passwd', 'pwd', 'secret'];
 
 function validateSql(sqlStr: string): void {
   const trimmed: string = sqlStr.trim().toUpperCase();
@@ -213,7 +212,7 @@ function removeSensitiveColumns(data: Record<string, unknown>[]): Record<string,
   return data.map((row) => {
     const cleaned: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(row)) {
-      if (!SENSITIVE_COLUMNS.includes(key.toLowerCase())) cleaned[key] = value;
+      if (!isSensitiveColumn(key)) cleaned[key] = value;
     }
     return cleaned;
   });

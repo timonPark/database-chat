@@ -89,6 +89,30 @@ function resolveInQuery(query: QueryInfo, key: string, depth: number): FieldHit 
     const hit = firstHit(star.qual ? sourcesFor(query, star.qual) : query.sources, key, depth);
     if (hit) return hit;
   }
+  return resolveDuplicate(query, key, depth);
+}
+
+// node-oracledb 는 결과 컬럼명이 겹치면 두 번째부터 `<이름>_1`, `<이름>_2` … 로 key 를 바꾼다
+// (셀프 조인 `e.first_name, m.first_name` 등). 정확한 이름으로 못 찾은 key 만, SELECT 목록에서
+// `<이름>` 이 n+1 번째로 나오는 위치 (명시 컬럼 · alias.* 펼침 순서) 의 소스로 매칭한다.
+function resolveDuplicate(query: QueryInfo, key: string, depth: number): FieldHit | null {
+  const m = key.match(/^(.+)_(\d+)$/);
+  if (!m || !query.items) return null;
+  const base = m[1].toLowerCase();
+  const nth = Number(m[2]);
+
+  const occurrences: (FieldHit | null)[] = [];
+  for (const item of query.items) {
+    if (item.star) {
+      for (const source of item.qual ? sourcesFor(query, item.qual) : query.sources) {
+        const hit = resolveInSource(source, base, depth);
+        if (hit) occurrences.push(hit);
+      }
+    } else if (item.key !== null && item.key.toLowerCase() === base) {
+      occurrences.push(item.col ? firstHit(item.qual ? sourcesFor(query, item.qual) : query.sources, item.col, depth) : null);
+    }
+    if (occurrences.length > nth) return occurrences[nth];
+  }
   return null;
 }
 

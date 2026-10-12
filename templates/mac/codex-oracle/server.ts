@@ -34,6 +34,11 @@ const CODEX_CHILD_ENV: NodeJS.ProcessEnv = (() => {
   return env;
 })();
 
+// LLM CLI 작업 폴더 — .env 가 있는 프로젝트 루트가 아닌 빈 임시 폴더에서 실행한다 (#219).
+// 프로젝트 루트에서 실행하면 codex(read-only 샌드박스) · agy(파일 보기 도구) 가 .env 를 읽을 수 있다.
+// 스키마 문서는 서버가 직접 읽어 프롬프트에 넣으므로 CLI 는 프로젝트 파일이 필요 없다.
+const CLI_WORKDIR: string = fs.mkdtempSync(path.join(os.tmpdir(), 'dbchat-cli-'));
+
 if (!DB_HOST || !DB_SERVICE_NAME || !DB_USER_NAME || !DB_USER_PASSWORD) {
   console.error('필수 환경 변수가 설정되지 않았습니다. .env 파일을 확인하세요.');
   process.exit(1);
@@ -453,7 +458,7 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
   const child: ChildProcess = spawn(
     resolveCodexCli(),
     codexArgs,
-    { stdio: ['ignore', 'pipe', 'pipe'], env: CODEX_CHILD_ENV },
+    { stdio: ['ignore', 'pipe', 'pipe'], env: CODEX_CHILD_ENV, cwd: CLI_WORKDIR },
   );
 
   if (requestId) activeJobs.set(requestId, child);

@@ -1,23 +1,23 @@
 # mac · gemini · mssql 테스트 결과
 
-> 이슈: #199 · 검증표: #189
+> 이슈: #199 · 검증표: #189 · 재측정: #227 (민감 컬럼 필터 수정 후)
 
 ## 결론
 
 | 항목 | 내용 |
 |---|---|
 | 실행일 · 실행자 | 2026-10-12 · Claude Code |
-| 설치 폴더 · 모델 | `gemini-mssql` (저장소 루트, `main` 템플릿 기준 — 매칭 스크립트 · server.ts 동일) · `gemini-3.8-flash-medium` |
+| 설치 폴더 · 모델 | `gemini-mssql` (저장소 루트, `main` 템플릿 + #227 `server.ts` · `build-columns.ts` 반영) · `gemini-3.8-flash-medium` |
 | 샘플 데이터 | README 1장 기준 — Docker SQL Server · `AdventureWorksLT2022` (SalesLT 10 + dbo 2 tables), `tables/*.md` 12/12 |
-| 결과 | ✅ 26 · ⚠️ 0 · ❌ 1 |
-| 최종 판정 | 결과 컬럼 매칭 통과 · 민감 컬럼 노출 실패 (#227) |
+| 결과 | ✅ 27 · ⚠️ 0 · ❌ 0 |
+| 최종 판정 | 통과 |
 
 ## REVIEW · FAIL 항목
 
-| ID | 등급 | 원인 분류 | 판단 · 조치 |
-|---|---|---|---|
-| D-14 | ❌ | 서버 설정 (민감 컬럼 필터) | `SELECT TOP 5 * FROM SalesLT.Customer` → `PasswordHash` · `PasswordSalt` 노출. 필터가 이름 정확 일치만 검사 (README 7장 알려진 문제) → #227 |
+없음.
 
+- #199 최초 실행에서 D-14 (3종) · TC-03 (codex) 가 ❌ — `PasswordHash` · `PasswordSalt` 노출. #227 수정 후 재측정
+- 민감 컬럼: D-14 `SELECT TOP 5 * FROM SalesLT.Customer` · TC-03 컬럼 나열 (`SELECT CustomerID, NameStyle, … FROM SalesLT.Customer`) 모두 `PasswordHash` · `PasswordSalt` 미노출
 - MSSQL 필수 케이스: `FROM SalesLT.t` (D-01) · `[SalesLT].[t]` (D-02) · `dbo.t` (D-03) · 접두사 없는 `FROM t` (D-04) · 3-part 이름 (D-06) · `WITH (NOLOCK)` (D-08) · `별칭 = 컬럼` (D-09) · CTE (D-13) 모두 PASS
 
 ## 실행기 보고서
@@ -26,10 +26,10 @@
 
 > 3종을 포트만 나눠 (`PORT=3111` · `3112` · `3113`) 동시에 실행
 
-- 실행: 2026-10-12T07:59:35.210Z · OS: darwin · 서버: http://localhost:3113
+- 실행: 2026-10-12T08:11:24.612Z · OS: darwin · 서버: http://localhost:3113
 - 설치 폴더: `~/Project/database-chat/gemini-mssql` · provider: gemini · 모델: gemini-3.8-flash-medium · WITH 허용: true
 - 샘플 데이터: AdventureWorksLT2022
-- 결과: ✅ 26 · ⚠️ 0 · ❌ 1 (총 27)
+- 결과: ✅ 27 · ⚠️ 0 · ❌ 0 (총 27)
 
 | ID | 구분 | 결과 | confidence | 미매칭 | 비고 |
 |---|---|---|---|---|---|
@@ -46,7 +46,7 @@
 | D-11 | 집계 | ✅ | partial | ProductCount |  |
 | D-12 | 결과 0건 헤더 | ✅ | full |  |  |
 | D-13 | CTE | ✅ | full |  |  |
-| D-14 | 민감 컬럼 | ❌ | full |  | 민감 컬럼 PasswordHash 가 결과에 노출됨 / 민감 컬럼 PasswordSalt 가 결과에 노출됨 |
+| D-14 | 민감 컬럼 | ✅ | full |  |  |
 | TC-01 | 회귀 | ✅ | full |  |  |
 | TC-02 | 회귀 | ✅ | full |  |  |
 | TC-03 | 회귀 · 민감 컬럼 | ✅ | full |  |  |
@@ -56,7 +56,7 @@
 | TC-07 | JOIN | ✅ | full |  |  |
 | TC-08 | JOIN | ✅ | full |  |  |
 | TC-09 | JOIN (3개 테이블) | ✅ | full |  |  |
-| TC-10 | JOIN · 동명 컬럼 | ✅ | full |  | Name 컬럼 없음 (별칭 · 생략) |
+| TC-10 | JOIN · 동명 컬럼 | ✅ | full |  |  |
 | TC-11 | 집계 | ✅ | partial | ProductCount |  |
 | TC-12 | 집계 · JOIN | ✅ | partial | TotalDue |  |
 | TC-13 | 결과 0건 | ✅ | full |  |  |
@@ -115,14 +115,14 @@
 - 실행 쿼리: `WITH cat AS (SELECT ProductCategoryID, Name FROM SalesLT.ProductCategory) SELECT TOP 5 p.Name, p.ListPrice FROM SalesLT.Product p JOIN cat ON cat.ProductCategoryID = p.ProductCategoryID`
 - 컬럼: Name→SalesLT.Product, ListPrice→SalesLT.Product
 
-### D-14 ❌ 민감 컬럼
+### D-14 ✅ 민감 컬럼
 - 실행 쿼리: `SELECT TOP 5 * FROM SalesLT.Customer`
-- 컬럼: CustomerID→SalesLT.Customer, NameStyle→SalesLT.Customer, Title→SalesLT.Customer, FirstName→SalesLT.Customer, MiddleName→SalesLT.Customer, LastName→SalesLT.Customer, Suffix→SalesLT.Customer, CompanyName→SalesLT.Customer, SalesPerson→SalesLT.Customer, EmailAddress→SalesLT.Customer, Phone→SalesLT.Customer, PasswordHash→SalesLT.Customer, PasswordSalt→SalesLT.Customer, rowguid→SalesLT.Customer, ModifiedDate→SalesLT.Customer
+- 컬럼: CustomerID→SalesLT.Customer, NameStyle→SalesLT.Customer, Title→SalesLT.Customer, FirstName→SalesLT.Customer, MiddleName→SalesLT.Customer, LastName→SalesLT.Customer, Suffix→SalesLT.Customer, CompanyName→SalesLT.Customer, SalesPerson→SalesLT.Customer, EmailAddress→SalesLT.Customer, Phone→SalesLT.Customer, rowguid→SalesLT.Customer, ModifiedDate→SalesLT.Customer
 
 ### TC-01 ✅ 회귀
 - 질문: 상품 목록 5개 보여줘
-- 실행 쿼리: `SELECT TOP 5 ProductID, Name, ProductNumber, Color, StandardCost, ListPrice, ProductCategoryID FROM SalesLT.Product ORDER BY ProductID`
-- 컬럼: ProductID→SalesLT.Product, Name→SalesLT.Product, ProductNumber→SalesLT.Product, Color→SalesLT.Product, StandardCost→SalesLT.Product, ListPrice→SalesLT.Product, ProductCategoryID→SalesLT.Product
+- 실행 쿼리: `SELECT TOP 5 ProductID, Name, ProductNumber, Color, StandardCost, ListPrice, ProductCategoryID, ProductModelID FROM SalesLT.Product ORDER BY ProductID`
+- 컬럼: ProductID→SalesLT.Product, Name→SalesLT.Product, ProductNumber→SalesLT.Product, Color→SalesLT.Product, StandardCost→SalesLT.Product, ListPrice→SalesLT.Product, ProductCategoryID→SalesLT.Product, ProductModelID→SalesLT.Product
 
 ### TC-02 ✅ 회귀
 - 질문: 정가가 가장 비싼 상품 10개의 이름과 가격 보여줘
@@ -131,17 +131,17 @@
 
 ### TC-03 ✅ 회귀 · 민감 컬럼
 - 질문: 고객 정보 전부 보여줘
-- 실행 쿼리: `SELECT CustomerID, NameStyle, Title, FirstName, MiddleName, LastName, Suffix, CompanyName, SalesPerson, EmailAddress, Phone FROM SalesLT.Customer`
-- 컬럼: CustomerID→SalesLT.Customer, NameStyle→SalesLT.Customer, Title→SalesLT.Customer, FirstName→SalesLT.Customer, MiddleName→SalesLT.Customer, LastName→SalesLT.Customer, Suffix→SalesLT.Customer, CompanyName→SalesLT.Customer, SalesPerson→SalesLT.Customer, EmailAddress→SalesLT.Customer, Phone→SalesLT.Customer
+- 실행 쿼리: `SELECT CustomerID, NameStyle, Title, FirstName, MiddleName, LastName, Suffix, CompanyName, SalesPerson, EmailAddress, Phone, rowguid, ModifiedDate FROM SalesLT.Customer`
+- 컬럼: CustomerID→SalesLT.Customer, NameStyle→SalesLT.Customer, Title→SalesLT.Customer, FirstName→SalesLT.Customer, MiddleName→SalesLT.Customer, LastName→SalesLT.Customer, Suffix→SalesLT.Customer, CompanyName→SalesLT.Customer, SalesPerson→SalesLT.Customer, EmailAddress→SalesLT.Customer, Phone→SalesLT.Customer, rowguid→SalesLT.Customer, ModifiedDate→SalesLT.Customer
 
 ### TC-04 ✅ 회귀 · 서브쿼리
 - 질문: 한 번도 주문되지 않은 상품 알려줘
-- 실행 쿼리: `SELECT t1.ProductID, t1.Name, t1.ProductNumber, t1.ListPrice, t1.StandardCost, t1.Color FROM SalesLT.Product t1 LEFT JOIN SalesLT.SalesOrderDetail t2 ON t1.ProductID = t2.ProductID WHERE t2.ProductID IS NULL ORDER BY t1.ProductID`
-- 컬럼: ProductID→SalesLT.Product, Name→SalesLT.Product, ProductNumber→SalesLT.Product, ListPrice→SalesLT.Product, StandardCost→SalesLT.Product, Color→SalesLT.Product
+- 실행 쿼리: `SELECT t1.ProductID, t1.Name, t1.ProductNumber, t1.ListPrice FROM SalesLT.Product t1 LEFT JOIN SalesLT.SalesOrderDetail t2 ON t1.ProductID = t2.ProductID WHERE t2.ProductID IS NULL ORDER BY t1.ProductID`
+- 컬럼: ProductID→SalesLT.Product, Name→SalesLT.Product, ProductNumber→SalesLT.Product, ListPrice→SalesLT.Product
 
 ### TC-05 ✅ JOIN · 동명 컬럼
 - 질문: 상품 이름과 카테고리 이름 보여줘
-- 실행 쿼리: `SELECT t1.Name, t2.Name FROM SalesLT.Product t1 JOIN SalesLT.ProductCategory t2 ON t1.ProductCategoryID = t2.ProductCategoryID`
+- 실행 쿼리: `SELECT TOP 20 t1.Name, t2.Name FROM SalesLT.Product t1 JOIN SalesLT.ProductCategory t2 ON t1.ProductCategoryID = t2.ProductCategoryID`
 - 컬럼: Name→SalesLT.Product
 
 ### TC-06 ✅ JOIN (상대 컬럼만)
@@ -156,22 +156,22 @@
 
 ### TC-08 ✅ JOIN
 - 질문: 주문 상세 내역을 상품 이름과 같이 보여줘
-- 실행 쿼리: `SELECT TOP 20 t1.SalesOrderID, t1.SalesOrderDetailID, t2.Name, t1.OrderQty, t1.UnitPrice, t1.LineTotal FROM SalesLT.SalesOrderDetail t1 JOIN SalesLT.Product t2 ON t1.ProductID = t2.ProductID ORDER BY t1.SalesOrderID DESC, t1.SalesOrderDetailID ASC`
-- 컬럼: SalesOrderID→SalesLT.SalesOrderDetail, SalesOrderDetailID→SalesLT.SalesOrderDetail, Name→SalesLT.Product, OrderQty→SalesLT.SalesOrderDetail, UnitPrice→SalesLT.SalesOrderDetail, LineTotal→SalesLT.SalesOrderDetail
+- 실행 쿼리: `SELECT TOP 20 t1.SalesOrderID, t1.SalesOrderDetailID, t1.ProductID, t2.Name, t1.OrderQty, t1.UnitPrice, t1.LineTotal FROM SalesLT.SalesOrderDetail t1 JOIN SalesLT.Product t2 ON t1.ProductID = t2.ProductID ORDER BY t1.SalesOrderID, t1.SalesOrderDetailID`
+- 컬럼: SalesOrderID→SalesLT.SalesOrderDetail, SalesOrderDetailID→SalesLT.SalesOrderDetail, ProductID→SalesLT.SalesOrderDetail, Name→SalesLT.Product, OrderQty→SalesLT.SalesOrderDetail, UnitPrice→SalesLT.SalesOrderDetail, LineTotal→SalesLT.SalesOrderDetail
 
 ### TC-09 ✅ JOIN (3개 테이블)
 - 질문: 고객 회사명과 주소의 도시 보여줘
-- 실행 쿼리: `SELECT TOP 20 c.CompanyName, a.City FROM SalesLT.Customer c JOIN SalesLT.CustomerAddress ca ON c.CustomerID = ca.CustomerID JOIN SalesLT.Address a ON ca.AddressID = a.AddressID`
+- 실행 쿼리: `SELECT TOP 20 t1.CompanyName, t3.City FROM SalesLT.Customer t1 JOIN SalesLT.CustomerAddress t2 ON t1.CustomerID = t2.CustomerID JOIN SalesLT.Address t3 ON t2.AddressID = t3.AddressID`
 - 컬럼: CompanyName→SalesLT.Customer, City→SalesLT.Address
 
 ### TC-10 ✅ JOIN · 동명 컬럼
 - 질문: 상품 이름과 상품 모델 이름 보여줘
-- 실행 쿼리: `SELECT TOP 20 t1.Name AS ProductName, t2.Name AS ProductModelName FROM SalesLT.Product t1 LEFT JOIN SalesLT.ProductModel t2 ON t1.ProductModelID = t2.ProductModelID`
-- 컬럼: ProductName→SalesLT.Product, ProductModelName→SalesLT.ProductModel
+- 실행 쿼리: `SELECT t1.Name, t2.Name FROM SalesLT.Product t1 INNER JOIN SalesLT.ProductModel t2 ON t1.ProductModelID = t2.ProductModelID`
+- 컬럼: Name→SalesLT.Product
 
 ### TC-11 ✅ 집계
 - 질문: 카테고리별 상품 수 알려줘
-- 실행 쿼리: `SELECT t1.Name, COUNT(t2.ProductID) AS ProductCount FROM SalesLT.ProductCategory t1 LEFT JOIN SalesLT.Product t2 ON t1.ProductCategoryID = t2.ProductCategoryID GROUP BY t1.ProductCategoryID, t1.Name ORDER BY ProductCount DESC`
+- 실행 쿼리: `SELECT t1.Name, COUNT(t2.ProductID) AS ProductCount FROM SalesLT.ProductCategory t1 LEFT JOIN SalesLT.Product t2 ON t1.ProductCategoryID = t2.ProductCategoryID GROUP BY t1.Name ORDER BY ProductCount DESC`
 - 컬럼: Name→SalesLT.ProductCategory, ProductCount→미매칭
 
 ### TC-12 ✅ 집계 · JOIN

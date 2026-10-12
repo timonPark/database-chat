@@ -10,7 +10,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { loadAllSchemas } from './scripts/load-schema-index.js';
 import { analyzeSql } from './scripts/sql-analyze.js';
-import { buildColumnsFromSql } from './scripts/build-columns.js';
+import { buildColumnsFromSql, isSensitiveColumn } from './scripts/build-columns.js';
 
 // ── 환경 변수 ──────────────────────────────────────────────────────────────────
 
@@ -181,7 +181,7 @@ ${buildTableSummary()}
 ${buildTableGuide()}
 
 규칙:
-- password · pass_hash · passwd · pwd · secret 컬럼은 반드시 SELECT 에서 제외
+- 이름에 password · passwd · pwd · secret 이 들어간 컬럼 (PasswordHash · PasswordSalt · user_password 등) 은 반드시 SELECT 에서 제외
 - SELECT · EXPLAIN · SHOW · DESCRIBE · DESC 만 허용 (INSERT · UPDATE · DELETE · DROP · ALTER · CREATE · TRUNCATE · REPLACE · MERGE · EXEC · EXECUTE · CALL · GRANT · REVOKE · LOAD DATA · INTO OUTFILE · INTO DUMPFILE 절대 금지)
 - LIMIT 은 반드시 ${limit} 로 명시 (누락 시 서버가 강제 부착). 엑셀 내보내기는 저장된 SQL 을 그대로 재실행함
 - JOIN 시 alias 는 짧게 (t1, t2 등). SELECT 컬럼 라벨링은 서버가 처리
@@ -200,7 +200,6 @@ ${message}`;
 
 const ALLOWED_SQL_PREFIXES: string[] = ['SELECT', 'EXPLAIN', 'SHOW', 'DESCRIBE', 'DESC'];
 const BLOCKED_SQL_KEYWORDS: RegExp = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|REPLACE|MERGE|EXEC|EXECUTE|CALL|GRANT|REVOKE|LOAD\s+DATA|INTO\s+OUTFILE|INTO\s+DUMPFILE)\b/i;
-const SENSITIVE_COLUMNS: string[] = ['password', 'pass_hash', 'passwd', 'pwd', 'secret'];
 
 function validateSql(sqlStr: string): void {
   const trimmed: string = sqlStr.trim().toUpperCase();
@@ -266,7 +265,7 @@ async function executeSqlInternal(rawSql: string, limit: number): Promise<{ body
 
   const data: Record<string, unknown>[] = rows.map((row: RowDataPacket) => {
     const r: Record<string, unknown> = { ...row };
-    for (const col of SENSITIVE_COLUMNS) delete r[col];
+    for (const key of Object.keys(r)) if (isSensitiveColumn(key)) delete r[key];
     return r;
   });
 
@@ -394,7 +393,7 @@ app.post('/db-export', async (req: Request<object, object, DbExportBody>, res: R
     const [rows] = await pool.query<RowDataPacket[]>({ sql: stored.sql, timeout: DB_TIMEOUT_MS });
     const data: Record<string, unknown>[] = rows.map((row: RowDataPacket) => {
       const r: Record<string, unknown> = { ...row };
-      for (const col of SENSITIVE_COLUMNS) delete r[col];
+      for (const key of Object.keys(r)) if (isSensitiveColumn(key)) delete r[key];
       return r;
     });
     console.log(`${ts()} [엑셀 내보내기] ${stored.table} ${data.length}건`);

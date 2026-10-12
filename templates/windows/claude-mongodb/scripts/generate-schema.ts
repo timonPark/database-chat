@@ -116,7 +116,7 @@ async function fetchModels(): Promise<string[]> {
   return models;
 }
 
-function buildBatchPrompt(dbName: string, batchSchema: string): string {
+function buildBatchPrompt(dbName: string, batchSchema: string, names: string[]): string {
   return `아래는 MongoDB 데이터베이스 \`${dbName}\`의 컬렉션 정보 일부입니다:
 
 \`\`\`
@@ -125,6 +125,10 @@ ${batchSchema}
 
 위 컬렉션들 각각에 대해 \`collections/<이름>.md\` 파일을 bash heredoc으로 현재 디렉토리에 작성하세요.
 index.md 와 collection-mapping.md 는 생성하지 마세요 (이후 별도 단계에서 처리합니다).
+
+## 작성할 파일 (경로 그대로 — 이름을 줄이거나 바꾸지 마세요)
+
+${names.map((n) => `- ${ENTITY_DIR}/${n}.md`).join('\n')}
 
 ## collections/<이름>.md 형식
 
@@ -148,10 +152,26 @@ index.md 와 collection-mapping.md 는 생성하지 마세요 (이후 별도 단
 ## 작성 지침
 - 각 필드의 한글 설명은 이름과 타입을 참고해 자연스럽게 작성하세요
 - 반드시 mkdir -p collections 후 각 컬렉션마다 heredoc으로 파일 생성
+- 파일은 Bash 의 cat heredoc 으로만 작성하세요 (Write · Edit 도구는 사용할 수 없습니다)
 `;
 }
 
 // 배치 하나를 Claude CLI 로 처리하면서 collections/*.md 생성 진행 상황을 출력
+// LLM 이 파일 이름에서 점(.) 앞부분을 빼고 쓴 경우 (db.coll → coll.md) 추출된 이름으로 되돌린다.
+// 같은 배치에 짧은 이름이 겹치는 컬렉션이 있으면 어느 쪽인지 알 수 없으므로 건드리지 않는다.
+function restoreShortNames(names: string[]): void {
+  const shortOf = (n: string) => n.slice(n.lastIndexOf('.') + 1);
+  for (const name of names) {
+    const short = shortOf(name);
+    if (short === name || fs.existsSync(path.join(ENTITY_DIR, `${name}.md`))) continue;
+    const shortFile = path.join(ENTITY_DIR, `${short}.md`);
+    if (!fs.existsSync(shortFile) || names.filter((n) => shortOf(n) === short).length > 1) continue;
+    const body = fs.readFileSync(shortFile, 'utf-8').replace(/^# .*$/m, (h) => (h === `# ${short}` ? `# ${name}` : h));
+    fs.writeFileSync(path.join(ENTITY_DIR, `${name}.md`), body);
+    fs.rmSync(shortFile);
+  }
+}
+
 function runBatch(
   claudeBin: string, model: string, prompt: string, names: string[],
   progress: { done: number; total: number },
@@ -181,7 +201,11 @@ function runBatch(
     child.on('error', (err) => { clearInterval(timer); reject(new Error(`${err.message}\n${log}`)); });
     child.on('close', (code) => {
       clearInterval(timer);
+      restoreShortNames(names);
       poll();
+      for (const name of names) {
+        if (!seen.has(name)) console.log(`      ⚠ ${ENTITY_DIR}/${name}.md 가 생성되지 않았습니다`);
+      }
       if (code === 0) resolve();
       else reject(new Error(log));
     });
@@ -287,7 +311,7 @@ async function main(): Promise<void> {
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
     console.log(`  ── 배치 ${i + 1}/${batches.length} (${batch.length}개 컬렉션) ──`);
-    const prompt = buildBatchPrompt(dbName, batch.map((b) => b.join('\n')).join('\n'));
+    const prompt = buildBatchPrompt(dbName, batch.map((b) => b.join('\n')).join('\n'), batch.map(nameOf));
     try {
       await runBatch(claudeBin, model, prompt, batch.map(nameOf), progress);
     } catch (err) {

@@ -118,7 +118,7 @@ curl -s http://localhost:3111/db-query -H 'Content-Type: application/json' \
 | MySQL | #191 | #196 | Windows claude · codex 허용 / Windows gemini · Mac 3종 거부 | Windows 결과: [claude](results/windows-claude-mysql.md) · [codex](results/windows-codex-mysql.md) · [gemini](results/windows-gemini-mysql.md) / Mac 결과: [claude](results/mac-claude-mysql.md) · [codex](results/mac-codex-mysql.md) · [gemini](results/mac-gemini-mysql.md) |
 | PostgreSQL | #192 | #197 | 전부 허용 | Windows 결과: [claude](results/windows-claude-postgresql.md) · [codex](results/windows-codex-postgresql.md) · [gemini](results/windows-gemini-postgresql.md) / Mac 결과: [claude](results/mac-claude-postgresql.md) · [codex](results/mac-codex-postgresql.md) · [gemini](results/mac-gemini-postgresql.md) |
 | Oracle | #193 | #198 | 전부 허용 | Windows 결과: [claude](results/windows-claude-oracle.md) · [codex](results/windows-codex-oracle.md) · [gemini](results/windows-gemini-oracle.md) / Mac 결과: [claude](results/mac-claude-oracle.md) · [codex](results/mac-codex-oracle.md) · [gemini](results/mac-gemini-oracle.md) |
-| MSSQL | #194 | #199 | 전부 허용 | 민감 컬럼 노출 (아래 알려진 문제) |
+| MSSQL | #194 | #199 | 전부 허용 | 민감 컬럼 노출 (아래 알려진 문제, #227) / Mac 결과: [claude](results/mac-claude-mssql.md) · [codex](results/mac-codex-mssql.md) · [gemini](results/mac-gemini-mssql.md) |
 | MongoDB | #195 | #200 | 해당 없음 | Windows 결과: [claude](results/windows-claude-mongodb.md) · [codex](results/windows-codex-mongodb.md) · [gemini](results/windows-gemini-mongodb.md) / Mac 결과: [claude](results/mac-claude-mongodb.md) · [codex](results/mac-codex-mongodb.md) · [gemini](results/mac-gemini-mongodb.md) |
 
 - **CTE 케이스**는 템플릿의 `ALLOWED_SQL_PREFIXES` 에 따라 기대 결과가 다릅니다. `--project` 를 주면 실행기가 자동으로 판정합니다 (미허용 템플릿은 400 거부가 PASS)
@@ -165,7 +165,7 @@ node docs/test-cases/run-cases.mjs --db mssql --list > docs/test-cases/cases/mss
 
 | 항목 | 내용 | 케이스 |
 |---|---|---|
-| **MSSQL 민감 컬럼 노출** | SQL 템플릿의 민감 컬럼 필터가 `password` · `pass_hash` · `passwd` · `pwd` · `secret` 과 **이름이 정확히 같을 때만** 제거 → AdventureWorksLT `SalesLT.Customer` 의 `PasswordHash` · `PasswordSalt` 가 노출됨 (오프라인 검증에서 FAIL 확인) | mssql `D-14` · `TC-03` |
+| **MSSQL 민감 컬럼 노출** | SQL 템플릿의 민감 컬럼 필터가 `password` · `pass_hash` · `passwd` · `pwd` · `secret` 과 **이름이 정확히 같을 때만** 제거 → AdventureWorksLT `SalesLT.Customer` 의 `PasswordHash` · `PasswordSalt` 가 노출됨 (오프라인 검증 · Mac 3종 실서버에서 FAIL 확인, #227) | mssql `D-14` · `TC-03` |
 | MongoDB `$project` | `$project` · `$group` · `$addFields` 등 형태를 바꾸는 stage 가 있으면 모든 key 가 매칭돼도 `partial` (현재 설계) | mongodb `D-08` · `TC-04` · `TC-05` |
 | MongoDB `$lookup` 배열 | `$unwind` 없이 배열이면 해당 key 미매칭 (현재 설계) | mongodb `D-09` |
 | `WITH` 허용 불일치 | 같은 provider · DB 라도 OS 에 따라 `WITH` 허용 여부가 다름 (MySQL) | 각 DB 의 CTE 케이스 |

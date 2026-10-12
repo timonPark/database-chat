@@ -5,6 +5,7 @@
 - 샘플 데이터: npm run seed → oracle/db-sample-schemas human_resources (HR 스키마), 접속 계정 hr / SERVICE FREEPDB1
 - 테이블: `COUNTRIES`, `DEPARTMENTS`, `EMPLOYEES`, `JOBS`, `JOB_HISTORY`, `LOCATIONS`, `REGIONS`
 - Oracle 은 따옴표 없는 식별자를 대문자로 저장하므로 결과 key 가 대문자(EMPLOYEE_ID)로 온다. 판정은 대소문자를 구분하지 않는다.
+- SELECT 목록에 같은 이름의 컬럼이 두 번 나오면 node-oracledb 가 두 번째부터 key 를 FIRST_NAME_1, FIRST_NAME_2 … 로 바꾼다 (D-12 · D-13, #223).
 - 스키마 파일 이름은 user_tables 기준 대문자 (tables/EMPLOYEES.md) — source 도 대문자
 
 ## 자연어 케이스 (`/chat`)
@@ -40,3 +41,5 @@
 | D-09 | 집계 | `SELECT department_id, COUNT(*) AS employee_count FROM employees GROUP BY department_id` | `partial` · DEPARTMENT_ID→EMPLOYEES · 미매칭 [EMPLOYEE_COUNT] |
 | D-10 | 결과 0건 헤더 | `SELECT first_name, salary FROM employees WHERE 1 = 0` | `full` · 전 컬럼 source=EMPLOYEES · 헤더 [first_name, salary] · 0건 |
 | D-11 | CTE | `WITH dept AS (SELECT department_id, department_name FROM departments) SELECT e.first_name, d.department_name FROM employees e JOIN dept d ON d.department_id = e.department_id FETCH FIRST 5 ROWS ONLY` | `full` · FIRST_NAME→EMPLOYEES, DEPARTMENT_NAME→DEPARTMENTS · WITH 미허용 템플릿은 400 거부가 기대 결과 |
+| D-12 | 동명 컬럼 중복 (셀프 조인) | `SELECT e.first_name, e.last_name, m.first_name, m.last_name FROM employees e JOIN employees m ON m.employee_id = e.manager_id FETCH FIRST 5 ROWS ONLY` | `full` · 전 컬럼 source=EMPLOYEES · 헤더 [FIRST_NAME, LAST_NAME, FIRST_NAME_1, LAST_NAME_1] |
+| D-13 | 동명 컬럼 중복 (다른 테이블) | `SELECT d.department_name, d.manager_id, e.manager_id FROM departments d JOIN employees e ON e.employee_id = d.manager_id` | `full` · DEPARTMENT_NAME→DEPARTMENTS, MANAGER_ID→DEPARTMENTS, MANAGER_ID_1→EMPLOYEES |

@@ -97,7 +97,7 @@ async function fetchModels(): Promise<string[]> {
   return models;
 }
 
-function buildBatchPrompt(dbName: string, batchSchema: string): string {
+function buildBatchPrompt(dbName: string, batchSchema: string, names: string[]): string {
   return `아래는 ${DB_DISPLAY_NAME} 데이터베이스 \`${dbName}\`의 테이블 정보 일부입니다:
 
 \`\`\`
@@ -106,6 +106,10 @@ ${batchSchema}
 
 위 테이블들 각각에 대해 \`${ENTITY_DIR}/<이름>.md\` 파일을 bash heredoc으로 현재 디렉토리에 작성하세요.
 index.md 와 ${MAPPING_FILE} 는 생성하지 마세요 (이후 별도 단계에서 처리합니다).
+
+## 작성할 파일 (경로 그대로 — 스키마 접두사 등 이름을 줄이거나 바꾸지 마세요)
+
+${names.map((n) => `- ${ENTITY_DIR}/${n}.md`).join('\n')}
 
 ## ${ENTITY_DIR}/<이름>.md 형식
 
@@ -129,6 +133,7 @@ index.md 와 ${MAPPING_FILE} 는 생성하지 마세요 (이후 별도 단계에
 ## 작성 지침
 - 각 컬럼의 한글 설명은 이름과 타입을 참고해 자연스럽게 작성하세요
 - 반드시 mkdir -p ${ENTITY_DIR} 후 각 테이블마다 heredoc으로 파일 생성
+- 파일은 Bash 의 cat heredoc 으로만 작성하세요 (Write · Edit 도구는 사용할 수 없습니다)
 `;
 }
 
@@ -175,7 +180,23 @@ ${ENTITY_DIR}/ 디렉토리에는 이미 각 테이블별 상세 .md 파일이 �
 - 테이블을 도메인별로 카테고리화하세요
 - 한국어 키워드는 자연어 채팅 검색에 적합하게 작성하세요
 - 건수 기준 내림차순으로 정렬하세요
+- 파일은 Bash 의 cat heredoc 으로만 작성하세요 (Write · Edit 도구는 사용할 수 없습니다)
 `;
+}
+
+// LLM 이 파일 이름에서 스키마 접두사를 빼고 쓴 경우 (SalesLT.Product → Product.md) 추출된 이름으로 되돌린다.
+// 같은 배치에 짧은 이름이 겹치는 테이블이 있으면 어느 쪽인지 알 수 없으므로 건드리지 않는다.
+function restoreShortNames(names: string[]): void {
+  const shortOf = (n: string) => n.slice(n.lastIndexOf('.') + 1);
+  for (const name of names) {
+    const short = shortOf(name);
+    if (short === name || fs.existsSync(path.join(ENTITY_DIR, `${name}.md`))) continue;
+    const shortFile = path.join(ENTITY_DIR, `${short}.md`);
+    if (!fs.existsSync(shortFile) || names.filter((n) => shortOf(n) === short).length > 1) continue;
+    const body = fs.readFileSync(shortFile, 'utf-8').replace(/^# .*$/m, (h) => (h === `# ${short}` ? `# ${name}` : h));
+    fs.writeFileSync(path.join(ENTITY_DIR, `${name}.md`), body);
+    fs.rmSync(shortFile);
+  }
 }
 
 function runBatch(
@@ -206,14 +227,18 @@ function runBatch(
     child.on('error', (err) => { clearInterval(timer); reject(new Error(`${err.message}\n${log}`)); });
     child.on('close', (code) => {
       clearInterval(timer);
+      restoreShortNames(names);
       poll();
+      for (const name of names) {
+        if (!seen.has(name)) console.log(`      ⚠ ${ENTITY_DIR}/${name}.md 가 생성되지 않았습니다`);
+      }
       if (code === 0) resolve();
       else reject(new Error(log));
     });
   });
 }
 
-function runFinal(claudeBin: string, model: string, prompt: string): Promise<void> {
+function runFinal(claudeBin: string, model: string, prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(claudeBin, ['-p', '--allowedTools', 'Bash', '--model', model], {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -225,7 +250,7 @@ function runFinal(claudeBin: string, model: string, prompt: string): Promise<voi
     child.stdin.end(prompt);
     child.on('error', (err) => { reject(new Error(`${err.message}\n${log}`)); });
     child.on('close', (code) => {
-      if (code === 0) resolve();
+      if (code === 0) resolve(log);
       else reject(new Error(log));
     });
   });
@@ -323,7 +348,7 @@ async function main(): Promise<void> {
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
     console.log(`  ── 배치 ${i + 1}/${batches.length} (${batch.length}개 테이블) ──`);
-    const prompt = buildBatchPrompt(dbName, batch.map((b) => b.join('\n')).join('\n'));
+    const prompt = buildBatchPrompt(dbName, batch.map((b) => b.join('\n')).join('\n'), batch.map(nameOf));
     try {
       await runBatch(claudeBin, model, prompt, batch.map(nameOf), progress);
     } catch (err) {
@@ -343,11 +368,23 @@ async function main(): Promise<void> {
   console.log('  ── 최종 단계: index.md · table-mapping.md 생성 ──');
   fs.rmSync('index.md', { force: true });
   fs.rmSync(MAPPING_FILE, { force: true });
-  try {
-    await runFinal(claudeBin, model, buildFinalPrompt(dbName, fullSchema));
-  } catch (err) {
-    console.log('\n최종 단계 오류:');
-    console.log((err as Error).message);
+  // claude 가 Bash 대신 Write 도구를 고르면 권한 요청 문구만 남기고 exit 0 으로 끝나 파일이 없을 수 있다 → 확인 후 1회 재시도
+  const finalOk = () => ['index.md', MAPPING_FILE].every((f) => fs.existsSync(f) && fs.statSync(f).size > 0);
+  let finalLog = '';
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      finalLog = await runFinal(claudeBin, model, buildFinalPrompt(dbName, fullSchema));
+    } catch (err) {
+      console.log('\n최종 단계 오류:');
+      console.log((err as Error).message);
+      process.exit(1);
+    }
+    if (finalOk()) break;
+    if (attempt === 1) console.log(`  ⚠ index.md · ${MAPPING_FILE} 가 생성되지 않아 1회 재시도합니다`);
+  }
+  if (!finalOk()) {
+    console.log(`\n최종 단계 오류: index.md · ${MAPPING_FILE} 가 생성되지 않았습니다. Claude 응답:`);
+    console.log(finalLog);
     process.exit(1);
   }
 

@@ -721,7 +721,8 @@ ${idFieldExample}
   // ── provider별 배치 호출 블록 ───────────────────────────────────────────────
   let batchCall: string;
   if (provider === 'claude') {
-    batchCall = `  cat > /tmp/_schema_batch_prompt.txt <<PROMPT_EOF
+    batchCall = `  _BATCH_FILES=\$(echo "\$_BATCH_NAMES" | sed '/^$/d; s|^|- ${entityDir}/|; s|$|.md|')
+  cat > /tmp/_schema_batch_prompt.txt <<PROMPT_EOF
 아래는 ${dbDisplayName} 데이터베이스 \\\`\${DB_NAME}\\\`의 ${entityLabel} 정보 일부입니다:
 
 \\\`\\\`\\\`
@@ -730,6 +731,10 @@ ${idFieldExample}
 
 위 ${entityLabel}들 각각에 대해 \\\`${entityDir}/<이름>.md\\\` 파일을 bash heredoc으로 현재 디렉토리에 작성하세요.
 index.md 와 ${mappingFile} 는 생성하지 마세요 (이후 별도 단계에서 처리합니다).
+
+## 작성할 파일 (경로 그대로 — 스키마 접두사 등 이름을 줄이거나 바꾸지 마세요)
+
+\${_BATCH_FILES}
 
 ## ${entityDir}/<이름>.md 형식
 
@@ -740,6 +745,7 @@ ${perEntityMdFormat}
 ## 작성 지침
 - 각 ${fieldLabel}의 한글 설명은 이름과 타입을 참고해 자연스럽게 작성하세요
 - 반드시 mkdir -p ${entityDir} 후 각 ${entityLabel}마다 heredoc으로 파일 생성
+- 파일은 Bash 의 cat heredoc 으로만 작성하세요 (Write · Edit 도구는 사용할 수 없습니다)
 PROMPT_EOF
 
   claude -p "\$(cat /tmp/_schema_batch_prompt.txt)" \\
@@ -759,7 +765,28 @@ PROMPT_EOF
       printf "      [%d/%s] %s 완료\\n" "\$_TOTAL_DONE" "\$ENTITY_COUNT" "\$_NAME"
     done <<< "\$_BATCH_NAMES"
   done
-  wait "\$_CLAUDE_PID" || { echo ""; echo "배치 \${_BATCH_IDX} 오류:"; cat /tmp/_schema_claude.log; exit 1; }`;
+  wait "\$_CLAUDE_PID" || { echo ""; echo "배치 \${_BATCH_IDX} 오류:"; cat /tmp/_schema_claude.log; exit 1; }
+
+  # LLM 이 파일 이름에서 스키마 접두사를 빼고 쓴 경우 (SalesLT.Product → Product.md) 추출된 이름으로 되돌린다.
+  # 같은 배치에 짧은 이름이 겹치는 ${entityLabel}이 있으면 어느 쪽인지 알 수 없으므로 건드리지 않는다.
+  while IFS= read -r _NAME; do
+    [ -z "\$_NAME" ] && continue
+    case "\$_SEEN" in *"|\$_NAME|"*) continue ;; esac
+    _SHORT="\${_NAME##*.}"
+    if [ ! -f "${entityDir}/\${_NAME}.md" ] && [ "\$_SHORT" != "\$_NAME" ] && [ -f "${entityDir}/\${_SHORT}.md" ] \\
+      && [ "\$(echo "\$_BATCH_NAMES" | awk -F. -v s="\$_SHORT" '\$NF == s' | wc -l | tr -d ' ')" = "1" ]; then
+      awk -v n="\$_NAME" -v s="\$_SHORT" 'NR == 1 && \$0 == "# " s { print "# " n; next } { print }' \\
+        "${entityDir}/\${_SHORT}.md" > "${entityDir}/\${_NAME}.md"
+      rm -f "${entityDir}/\${_SHORT}.md"
+    fi
+    if [ -f "${entityDir}/\${_NAME}.md" ]; then
+      _SEEN="\$_SEEN|\$_NAME|"
+      _TOTAL_DONE=\$((_TOTAL_DONE + 1))
+      printf "      [%d/%s] %s 완료\\n" "\$_TOTAL_DONE" "\$ENTITY_COUNT" "\$_NAME"
+    else
+      echo "      ⚠ ${entityDir}/\${_NAME}.md 가 생성되지 않았습니다"
+    fi
+  done <<< "\$_BATCH_NAMES"`;
   } else if (provider === 'gemini') {
     batchCall = `  cat > /tmp/_schema_batch_prompt.txt <<PROMPT_EOF
 아래는 ${dbDisplayName} 데이터베이스 \\\`\${DB_NAME}\\\`의 ${entityLabel} 정보 일부입니다:
@@ -945,15 +972,23 @@ ${finalMdFormats}
 - ${entityLabel}을 도메인별로 카테고리화하세요
 - 한국어 키워드는 자연어 채팅 검색에 적합하게 작성하세요
 - 건수 기준 내림차순으로 정렬하세요
+- 파일은 Bash 의 cat heredoc 으로만 작성하세요 (Write · Edit 도구는 사용할 수 없습니다)
 FINAL_EOF
 
 # yarn 은 자식 프로세스의 stdin 을 pipe 로 열어 상속시켜 Claude CLI 가 대기 상태에 빠질 수 있음.
 # < /dev/null 로 명시적 close. 또한 기존 placeholder 가 있으면 LLM 이 '이미 있으니 스킵' 으로 판단할 수 있어 사전 삭제.
 rm -f "index.md" "${mappingFile}"
 
-claude -p "\$(cat /tmp/_schema_final_prompt.txt)" \\
-  --allowedTools Bash \\
-  --model "\$MODEL_VALUE" </dev/null > /tmp/_schema_claude.log 2>&1 || { echo "최종 단계 오류:"; cat /tmp/_schema_claude.log; exit 1; }`;
+# claude 가 Bash 대신 Write 도구를 고르면 권한 요청 문구만 남기고 exit 0 으로 끝나 파일이 없을 수 있다 → 확인 후 1회 재시도
+_final_ok() { [ -s "index.md" ] && [ -s "${mappingFile}" ]; }
+for _TRY in 1 2; do
+  claude -p "\$(cat /tmp/_schema_final_prompt.txt)" \\
+    --allowedTools Bash \\
+    --model "\$MODEL_VALUE" </dev/null > /tmp/_schema_claude.log 2>&1 || { echo "최종 단계 오류:"; cat /tmp/_schema_claude.log; exit 1; }
+  _final_ok && break
+  [ "\$_TRY" = 1 ] && echo "  ⚠ index.md · ${mappingFile} 가 생성되지 않아 1회 재시도합니다"
+done
+_final_ok || { echo "최종 단계 오류: index.md · ${mappingFile} 가 생성되지 않았습니다. Claude 응답:"; cat /tmp/_schema_claude.log; exit 1; }`;
   } else if (provider === 'gemini') {
     finalCall = `cat > /tmp/_schema_final_prompt.txt <<FINAL_EOF
 아래는 ${dbDisplayName} 데이터베이스 \\\`\${DB_NAME}\\\`의 전체 ${entityLabel} 정보입니다:

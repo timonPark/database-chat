@@ -4,6 +4,7 @@ import { spawn, execSync, ChildProcess } from 'child_process';
 import { MongoClient, ObjectId, Decimal128, Document, Filter, Sort, Db, FindCursor, WithId } from 'mongodb';
 import type { Server } from 'http';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { loadAllSchemas } from './scripts/load-schema-index.js';
 import { analyzePipeline } from './scripts/pipeline-analyze.js';
@@ -34,6 +35,11 @@ const AGY_CHILD_ENV: NodeJS.ProcessEnv = (() => {
   for (const key of SENSITIVE_KEYS) delete env[key];
   return env;
 })();
+
+// LLM CLI 작업 폴더 — .env 가 있는 프로젝트 루트가 아닌 빈 임시 폴더에서 실행한다 (#219).
+// 프로젝트 루트에서 실행하면 codex(read-only 샌드박스) · agy(파일 보기 도구) 가 .env 를 읽을 수 있다.
+// 스키마 문서는 서버가 직접 읽어 프롬프트에 넣으므로 CLI 는 프로젝트 파일이 필요 없다.
+const CLI_WORKDIR: string = fs.mkdtempSync(path.join(os.tmpdir(), 'dbchat-cli-'));
 
 if (!DB_HOST || !DB_DATABASE || !DB_USER_NAME || !DB_USER_PASSWORD) {
   console.error('필수 환경 변수가 설정되지 않았습니다. .env 파일을 확인하세요.');
@@ -855,7 +861,7 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
       '--sandbox',
       '--print-timeout', GEMINI_PRINT_TIMEOUT,
     ],
-    { stdio: ['ignore', 'pipe', 'pipe'], env: AGY_CHILD_ENV }
+    { stdio: ['ignore', 'pipe', 'pipe'], env: AGY_CHILD_ENV, cwd: CLI_WORKDIR }
   );
 
   if (requestId) activeJobs.set(requestId, child);

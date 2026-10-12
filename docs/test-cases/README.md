@@ -166,7 +166,6 @@ node docs/test-cases/run-cases.mjs --db mssql --list > docs/test-cases/cases/mss
 | 항목 | 내용 | 케이스 |
 |---|---|---|
 | **MSSQL 민감 컬럼 노출** | SQL 템플릿의 민감 컬럼 필터가 `password` · `pass_hash` · `passwd` · `pwd` · `secret` 과 **이름이 정확히 같을 때만** 제거 → AdventureWorksLT `SalesLT.Customer` 의 `PasswordHash` · `PasswordSalt` 가 노출됨 (오프라인 검증에서 FAIL 확인) | mssql `D-14` · `TC-03` |
-| **Oracle 동명 컬럼 중복** (#223) | SELECT 목록에 같은 이름 컬럼이 두 번 나오면 (셀프 조인에서 별칭 없이 `t1.FIRST_NAME, t2.FIRST_NAME`) node-oracledb 가 두 번째 key 를 `FIRST_NAME_1` 로 바꿔 미매칭 → `partial`. LLM 이 별칭을 붙이면 발생하지 않음 | oracle `TC-09` |
 | MongoDB `$project` | `$project` · `$group` · `$addFields` 등 형태를 바꾸는 stage 가 있으면 모든 key 가 매칭돼도 `partial` (현재 설계) | mongodb `D-08` · `TC-04` · `TC-05` |
 | MongoDB `$lookup` 배열 | `$unwind` 없이 배열이면 해당 key 미매칭 (현재 설계) | mongodb `D-09` |
 | `WITH` 허용 불일치 | 같은 provider · DB 라도 OS 에 따라 `WITH` 허용 여부가 다름 (MySQL) | 각 DB 의 CTE 케이스 |

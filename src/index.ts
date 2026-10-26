@@ -1224,7 +1224,7 @@ ${pmCmd} run schema
     ...(provider === 'gemini' ? [['GEMINI_API_KEY', 'Gemini API 키', '—']] as [string, string, string][] : []),
     ...(provider === 'codex' ? [
       ['CODEX_MODEL', 'Codex 모델', 'gpt-5.6-luna'],
-      ['CODEX_CLI_PATH', 'Codex CLI 경로', '/Applications/ChatGPT.app/Contents/Resources/codex'],
+      ['CODEX_CLI_PATH', 'Codex CLI 경로 (PATH 로 못 찾을 때만)', '(선택)'],
     ] as [string, string, string][] : []),
   ];
   const envTable = envRows.map(([k, d, v]) => `| \`${k}\` | ${d} | \`${v}\` |`).join('\n');

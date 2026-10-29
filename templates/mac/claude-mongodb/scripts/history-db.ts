@@ -125,9 +125,16 @@ const mapMessageRow = (r: RawMessageRow): MessageRow => ({
   attachments: r.attachments ? JSON.parse(r.attachments) : null,
 });
 
+export class HistoryDbValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HistoryDbValidationError';
+  }
+}
+
 function assertUuid(id: string, label: string): void {
   if (typeof id !== 'string' || !UUID_RE.test(id)) {
-    throw new Error(`[history-db] ${label} 는 UUID 형태여야 합니다`);
+    throw new HistoryDbValidationError(`[history-db] ${label} 는 UUID 형태여야 합니다`);
   }
 }
 
@@ -314,14 +321,14 @@ export function openHistoryDb(projectRoot: string): HistoryDb {
   const assertInsideExports = (abs: string): void => {
     const r = resolve(abs);
     if (r !== resolvedExportsRoot && !r.startsWith(resolvedExportsRoot + sep)) {
-      throw new Error('[history-db] 경로가 data/exports/ 밖입니다');
+      throw new HistoryDbValidationError('[history-db] 경로가 data/exports/ 밖입니다');
     }
   };
 
   // exports.file_path 는 외부 포이즈닝 가능 → insertExport 입구에서 반드시 검증.
   const assertExportRelativePath = (rel: string): void => {
     if (typeof rel !== 'string' || rel.length === 0 || rel.includes('\x00')) {
-      throw new Error('[history-db] 잘못된 export 경로');
+      throw new HistoryDbValidationError('[history-db] 잘못된 export 경로');
     }
     assertInsideExports(resolve(projectRoot, rel));
   };

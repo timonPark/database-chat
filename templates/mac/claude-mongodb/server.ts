@@ -8,6 +8,7 @@ import path from 'path';
 import { loadAllSchemas } from './scripts/load-schema-index.js';
 import { analyzePipeline } from './scripts/pipeline-analyze.js';
 import { buildColumnsFromQuery, buildColumnsFromPipeline } from './scripts/build-columns.js';
+import { openHistoryDb, HistoryDbValidationError } from './scripts/history-db.js';
 
 // ── 환경 변수 ──────────────────────────────────────────────────────────────────
 
@@ -688,6 +689,7 @@ app.use(express.static(path.join(import.meta.dirname, 'public')));
 
 const activeJobs: Map<string, ChildProcess> = new Map();
 const queryParamsStore: Map<string, QueryParams> = new Map();
+const historyDb = openHistoryDb(import.meta.dirname);
 
 // ── 엔드포인트 ────────────────────────────────────────────────────────────────
 
@@ -998,12 +1000,153 @@ function killPort(port: string): void {
   } catch { /* 점유 프로세스 없음 */ }
 }
 
+// ── Session · Message · Export 엔드포인트 ────────────────────────────────────
+
+interface SessionCreateBody { firstQuery?: unknown }
+interface SessionRenameBody { title?: unknown }
+interface MessageCreateBody {
+  role?: unknown;
+  text?: unknown;
+  generatedQuery?: unknown;
+  attachments?: unknown;
+}
+
+function sendError(res: Response, status: number, message: string): void {
+  res.status(status).json({ error: message });
+}
+
+function handleHistoryError(res: Response, e: unknown): void {
+  if (e instanceof HistoryDbValidationError) {
+    sendError(res, 400, e.message);
+    return;
+  }
+  console.error('[history-db]', e);
+  sendError(res, 500, e instanceof Error ? e.message : String(e));
+}
+
+app.get('/sessions', (_req: Request, res: Response) => {
+  res.json(historyDb.listSessions());
+});
+
+app.post('/sessions', (req: Request<object, object, SessionCreateBody>, res: Response) => {
+  const firstQuery = typeof req.body.firstQuery === 'string' ? req.body.firstQuery : '';
+  const session = historyDb.createSession(firstQuery);
+  res.status(201).json(session);
+});
+
+app.patch('/sessions/:id', (req: Request<{ id: string }, object, SessionRenameBody>, res: Response) => {
+  const title = typeof req.body.title === 'string' ? req.body.title.trim() : '';
+  if (!title) {
+    sendError(res, 400, 'title 은 비어있을 수 없습니다');
+    return;
+  }
+  try {
+    historyDb.renameSession(req.params.id, title);
+    res.status(204).end();
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
+app.delete('/sessions/:id', (req: Request<{ id: string }>, res: Response) => {
+  try {
+    historyDb.deleteSession(req.params.id);
+    res.status(204).end();
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
+app.get('/sessions/:id/messages', (req: Request<{ id: string }>, res: Response) => {
+  try {
+    res.json(historyDb.listMessages(req.params.id));
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
+app.post('/sessions/:id/messages', (req: Request<{ id: string }, object, MessageCreateBody>, res: Response) => {
+  const { role, text, generatedQuery, attachments } = req.body;
+  if (role !== 'user' && role !== 'assistant') {
+    sendError(res, 400, 'role 은 user 또는 assistant 여야 합니다');
+    return;
+  }
+  if (typeof text !== 'string') {
+    sendError(res, 400, 'text 는 문자열이어야 합니다');
+    return;
+  }
+  let generatedQueryValue: string | null | undefined;
+  if (typeof generatedQuery === 'string') generatedQueryValue = generatedQuery;
+  else if (generatedQuery === null) generatedQueryValue = null;
+  else generatedQueryValue = undefined;
+  try {
+    const messageId = historyDb.insertMessage(req.params.id, {
+      role,
+      text,
+      generatedQuery: generatedQueryValue,
+      attachments,
+    });
+    res.status(201).json({ id: messageId });
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
+app.get('/sessions/:id/exports', (req: Request<{ id: string }>, res: Response) => {
+  try {
+    res.json(historyDb.listExports(req.params.id));
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
+app.get('/exports/:id/download', (req: Request<{ id: string }>, res: Response) => {
+  let exp;
+  try {
+    exp = historyDb.getExport(req.params.id);
+  } catch (e) {
+    handleHistoryError(res, e);
+    return;
+  }
+  if (!exp) {
+    sendError(res, 404, 'export not found');
+    return;
+  }
+  const abs = path.resolve(import.meta.dirname, exp.filePath);
+  res.download(abs, exp.fileName, (err): void => {
+    if (!err) return;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      try { historyDb.deleteExport(req.params.id); } catch { /* 레코드 정리 실패해도 404 유지 */ }
+      if (!res.headersSent) sendError(res, 404, 'file not found');
+      return;
+    }
+    if (!res.headersSent) sendError(res, 500, '파일 전송 실패');
+  });
+});
+
+app.delete('/exports/:id', (req: Request<{ id: string }>, res: Response) => {
+  try {
+    historyDb.deleteExport(req.params.id);
+    res.status(204).end();
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
 mongoClient
   .connect()
   .then((): void => {
     console.log(`MongoDB 연결 완료: ${DB_HOST}:${DB_PORT}/${DB_DATABASE}`);
     const server: Server = app.listen(Number(PORT), (): void => {
       console.log(`서버 실행 중: http://localhost:${PORT}`);
+      setImmediate((): void => {
+        const orphans = historyDb.cleanupOrphans();
+        if (orphans.orphanFiles > 0 || orphans.orphanRecords > 0) {
+          console.log(
+            `[history-db] 고아 정리: files=${orphans.orphanFiles} records=${orphans.orphanRecords}`,
+          );
+        }
+      });
     });
     server.on('error', (err: NodeJS.ErrnoException): void => {
       if (err.code === 'EADDRINUSE') {
@@ -1025,14 +1168,12 @@ mongoClient
     process.exit(1);
   });
 
-process.on('SIGINT', async (): Promise<void> => {
+async function shutdown(): Promise<void> {
+  historyDb.close();
   await mongoClient.close();
   console.log('MongoDB 커넥션 종료');
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', async (): Promise<void> => {
-  await mongoClient.close();
-  console.log('MongoDB 커넥션 종료');
-  process.exit(0);
-});
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

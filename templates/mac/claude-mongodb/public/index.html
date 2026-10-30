@@ -17,7 +17,112 @@
       color: #e0e0e0;
       height: 100dvh;
       display: flex;
+      flex-direction: row;
+    }
+
+    /* 사이드바 — Session 리스트 */
+    #sidebar {
+      width: 260px;
+      flex-shrink: 0;
+      background: #141427;
+      border-right: 1px solid #0f3460;
+      display: flex;
       flex-direction: column;
+      overflow: hidden;
+    }
+
+    #sidebar-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid #0f3460;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #new-session-btn {
+      flex: 1;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid #2a4a6a;
+      background: #1a2a4a;
+      color: #b0d4f0;
+      font-size: 0.84rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    #new-session-btn:hover { background: #2a3a5a; color: #e0eeff; }
+
+    #session-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .session-item {
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      position: relative;
+      transition: background 0.1s;
+    }
+    .session-item:hover { background: #1a2a4a; }
+    .session-item.active { background: #1a3a5a; }
+
+    .session-title {
+      font-size: 0.86rem;
+      color: #e0e0e0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .session-meta {
+      display: flex;
+      gap: 8px;
+      font-size: 0.72rem;
+      color: #5a7fa0;
+      font-family: monospace;
+    }
+
+    .session-attach-badge {
+      color: #7ab3e0;
+    }
+
+    .session-hover-menu {
+      position: absolute;
+      right: 6px;
+      top: 6px;
+      display: none;
+      gap: 2px;
+      background: #0d1a2e;
+      border-radius: 6px;
+      padding: 2px;
+    }
+    .session-item:hover .session-hover-menu { display: flex; }
+
+    .session-menu-btn {
+      background: none;
+      border: none;
+      color: #7ab3e0;
+      cursor: pointer;
+      padding: 3px 6px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+    }
+    .session-menu-btn:hover { background: #1a3a5a; color: #e0e0e0; }
+
+    /* 메인 영역 — 기존 header + chat-window + input-area 를 감싸는 flex 컨테이너 */
+    #main-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
     header {
@@ -28,6 +133,84 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+    }
+
+    /* 과거 Session 안내 배너 */
+    #past-session-banner {
+      padding: 8px 20px;
+      background: #2a3a1a;
+      border-bottom: 1px solid #3a4a2a;
+      color: #d0e0b0;
+      font-size: 0.82rem;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    /* Export 칩 */
+    .export-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .export-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #1a3a5a;
+      border: 1px solid #2a4a6a;
+      color: #b0d4f0;
+      font-size: 0.78rem;
+      cursor: pointer;
+      position: relative;
+      transition: background 0.1s;
+    }
+    .export-chip:hover { background: #2a4a6a; }
+
+    .export-chip-delete {
+      display: none;
+      background: none;
+      border: none;
+      color: #d08080;
+      cursor: pointer;
+      padding: 0 2px 0 4px;
+      font-size: 0.9rem;
+      line-height: 1;
+    }
+    .export-chip:hover .export-chip-delete { display: inline; }
+    .export-chip-delete:hover { color: #ff5a5a; }
+
+    /* 토스트 */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #0f3460;
+      color: #e0eeff;
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-size: 0.86rem;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      z-index: 2000;
+    }
+    #toast.visible { opacity: 1; }
+
+    /* Attachment 복원 — table-ref 안내 */
+    .attachment-ref {
+      padding: 10px 12px;
+      background: #1a2a3a;
+      border: 1px dashed #2a4a6a;
+      border-radius: 8px;
+      color: #8ab0d0;
+      font-size: 0.85rem;
+      margin-top: 8px;
     }
 
     .header-left h1 {
@@ -606,16 +789,26 @@
   </style>
 </head>
 <body>
-  <header>
-    <div class="header-left">
-      <h1>Claude Mongo Chat</h1>
-      <div class="updated-at" id="updated-at"></div>
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <button id="new-session-btn">+ 새 Session</button>
     </div>
-    <div class="header-actions">
-      <button id="erd-btn" title="먼저 pnpm run erd 를 실행하세요" disabled>ERD 보기</button>
-      <button id="table-info-btn">테이블 정보</button>
-    </div>
-  </header>
+    <div id="session-list"></div>
+  </aside>
+
+  <div id="main-area">
+    <header>
+      <div class="header-left">
+        <h1>Claude Mongo Chat</h1>
+        <div class="updated-at" id="updated-at"></div>
+      </div>
+      <div class="header-actions">
+        <button id="erd-btn" title="먼저 pnpm run erd 를 실행하세요" disabled>ERD 보기</button>
+        <button id="table-info-btn">테이블 정보</button>
+      </div>
+    </header>
+
+    <div id="past-session-banner" style="display:none">이전 Session 입니다 — 새 질의는 새 Session 에서 시작됩니다</div>
 
   <div id="erd-modal" class="modal-overlay" style="display:none">
     <div class="modal-box">
@@ -661,14 +854,351 @@
       <button id="send-btn">전송</button>
     </div>
   </div>
+  </div>
+
+  <div id="toast"></div>
 
   <script>
     const chatWindow = document.getElementById('chat-window');
     const userInput = document.getElementById('user-input');
     const sendBtn = document.getElementById('send-btn');
     const stopBtn = document.getElementById('stop-btn');
+    const sidebarList = document.getElementById('session-list');
+    const newSessionBtn = document.getElementById('new-session-btn');
+    const pastSessionBanner = document.getElementById('past-session-banner');
+    const toastEl = document.getElementById('toast');
 
     let currentRequestId = null;
+
+    // 활성 세션이 "최신 Session" 과 다를 때만 과거 열람 모드로 간주.
+    // 신규 질의는 최신 Session 에서만 수용 — 과거 열람 중 입력 시 자동 신규 Session + 토스트 (에픽 #232 결정 요약 3번).
+    const state = {
+      sessions: [],
+      currentSessionId: null,
+      exportsBySessionId: new Map(),
+    };
+
+    const isViewingPast = () => state.currentSessionId != null
+      && state.currentSessionId !== state.sessions[0]?.id;
+
+    // 2xx 또는 204 를 성공으로 판정 — fetch 는 비-2xx 를 throw 하지 않으므로 소비자 쪽 가드.
+    const okOrNoContent = (res) => res.ok || res.status === 204;
+
+    const api = {
+      listSessions: () => fetch('/sessions').then(r => r.json()),
+      createSession: (firstQuery) => fetch('/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ firstQuery }),
+      }).then(r => r.json()),
+      renameSession: (id, title) => fetch(`/sessions/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      }),
+      deleteSession: (id) => fetch(`/sessions/${id}`, { method: 'DELETE' }),
+      listMessages: (id) => fetch(`/sessions/${id}/messages`).then(r => r.json()),
+      listExports: (id) => fetch(`/sessions/${id}/exports`).then(r => r.json()),
+      deleteExport: (id) => fetch(`/exports/${id}`, { method: 'DELETE' }),
+    };
+
+    // 전역 단일 타이머. 연쇄 호출 시 이전 메시지가 즉시 교체되고 visible 상태는 유지 — 짧은 간격 알림은 마지막 것만 보임 (의도).
+    let toastTimer = null;
+    function showToast(text, durationMs = 2200) {
+      toastEl.textContent = text;
+      toastEl.classList.add('visible');
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toastEl.classList.remove('visible'), durationMs);
+    }
+
+    // ── 상대시각 ("5분 전") ─────────────────────────────────────────────────────
+    function formatRelative(ts) {
+      const diffMs = Date.now() - ts;
+      const sec = Math.floor(diffMs / 1000);
+      if (sec < 60) return '방금';
+      const min = Math.floor(sec / 60);
+      if (min < 60) return `${min}분 전`;
+      const hr = Math.floor(min / 60);
+      if (hr < 24) return `${hr}시간 전`;
+      const day = Math.floor(hr / 24);
+      if (day < 7) return `${day}일 전`;
+      return new Date(ts).toISOString().slice(0, 10);
+    }
+
+    function formatBytes(n) {
+      if (n < 1024) return `${n}B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+      return `${(n / 1024 / 1024).toFixed(1)}MB`;
+    }
+
+    // ── 사이드바 렌더 ───────────────────────────────────────────────────────────
+    function renderSidebar() {
+      sidebarList.innerHTML = '';
+      for (const s of state.sessions) {
+        const item = document.createElement('div');
+        item.className = 'session-item' + (s.id === state.currentSessionId ? ' active' : '');
+        item.dataset.id = s.id;
+
+        const title = document.createElement('div');
+        title.className = 'session-title';
+        title.textContent = s.title || '(제목 없음)';
+        item.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'session-meta';
+        const t = document.createElement('span');
+        t.textContent = formatRelative(s.updatedAt);
+        meta.appendChild(t);
+        const expCount = (state.exportsBySessionId.get(s.id) || []).length;
+        if (expCount > 0) {
+          const b = document.createElement('span');
+          b.className = 'session-attach-badge';
+          b.textContent = `📎 ${expCount}`;
+          meta.appendChild(b);
+        }
+        item.appendChild(meta);
+
+        const menu = document.createElement('div');
+        menu.className = 'session-hover-menu';
+
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'session-menu-btn';
+        renameBtn.textContent = '✎';
+        renameBtn.title = '리네임';
+        renameBtn.onclick = (e) => { e.stopPropagation(); handleRename(s); };
+
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'session-menu-btn';
+        dlBtn.textContent = '⇩';
+        dlBtn.title = 'JSON 내보내기';
+        dlBtn.onclick = (e) => { e.stopPropagation(); handleExportJson(s); };
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'session-menu-btn';
+        delBtn.textContent = '✕';
+        delBtn.title = '삭제';
+        delBtn.onclick = (e) => { e.stopPropagation(); handleDelete(s); };
+
+        menu.appendChild(renameBtn);
+        menu.appendChild(dlBtn);
+        menu.appendChild(delBtn);
+        item.appendChild(menu);
+
+        item.onclick = () => selectSession(s.id);
+        sidebarList.appendChild(item);
+      }
+    }
+
+    async function handleRename(session) {
+      const next = prompt('새 Session 제목', session.title || '');
+      if (next == null) return;
+      const trimmed = next.trim();
+      if (!trimmed || trimmed === session.title) return;
+      const res = await api.renameSession(session.id, trimmed);
+      if (!okOrNoContent(res)) { showToast('리네임 실패'); return; }
+      session.title = trimmed;
+      renderSidebar();
+    }
+
+    async function handleDelete(session) {
+      if (!confirm(`Session "${session.title}" 을 삭제할까요?\n(연결된 메시지·Export 도 함께 삭제됩니다.)`)) return;
+      const res = await api.deleteSession(session.id);
+      if (!okOrNoContent(res)) { showToast('삭제 실패'); return; }
+      state.sessions = state.sessions.filter(x => x.id !== session.id);
+      state.exportsBySessionId.delete(session.id);
+      if (state.currentSessionId === session.id) {
+        state.currentSessionId = state.sessions[0]?.id ?? null;
+        if (state.currentSessionId) await selectSession(state.currentSessionId);
+        else clearChatWindow();
+      }
+      renderSidebar();
+    }
+
+    function handleExportJson(session) {
+      // 저장된 메시지와 Export 메타를 JSON 번들로 로컬 다운로드.
+      Promise.all([api.listMessages(session.id), api.listExports(session.id)])
+        .then(([messages, exports]) => {
+          const bundle = { session, messages, exports };
+          const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = `session-${session.id}.json`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        })
+        .catch(() => showToast('JSON 내보내기 실패'));
+    }
+
+    async function selectSession(id) {
+      state.currentSessionId = id;
+      pastSessionBanner.style.display = isViewingPast() ? '' : 'none';
+      renderSidebar();
+      await restoreSession(id);
+    }
+
+    async function createNewSession(firstQuery) {
+      const created = await api.createSession(firstQuery ?? '');
+      await refreshSessions();
+      state.currentSessionId = created.id;
+      pastSessionBanner.style.display = 'none';
+      renderSidebar();
+      clearChatWindow();
+      return created.id;
+    }
+
+    async function refreshSessions() {
+      const list = await api.listSessions();
+      state.sessions = list;
+      // Export 목록은 뱃지에 쓰임 — 열려있는 세션 외는 lazy, 세션 리스트 전환 시 캐시 재사용.
+      await Promise.all(list.map(async s => {
+        if (!state.exportsBySessionId.has(s.id)) {
+          try {
+            const exps = await api.listExports(s.id);
+            state.exportsBySessionId.set(s.id, exps);
+          } catch { state.exportsBySessionId.set(s.id, []); }
+        }
+      }));
+    }
+
+    function clearChatWindow() {
+      chatWindow.innerHTML = '';
+    }
+
+    // ── Session 복원 ────────────────────────────────────────────────────────────
+    async function restoreSession(id) {
+      clearChatWindow();
+      const [messages, exports] = await Promise.all([
+        api.listMessages(id),
+        api.listExports(id),
+      ]);
+      state.exportsBySessionId.set(id, exports);
+      const exportsByMessageId = new Map();
+      for (const e of exports) {
+        if (!e.messageId) continue;
+        if (!exportsByMessageId.has(e.messageId)) exportsByMessageId.set(e.messageId, []);
+        exportsByMessageId.get(e.messageId).push(e);
+      }
+      for (const m of messages) {
+        renderRestoredMessage(m, exportsByMessageId.get(m.id) || []);
+      }
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function renderRestoredMessage(m, msgExports) {
+      if (m.role === 'user') {
+        const w = document.createElement('div');
+        w.className = 'msg-wrapper user';
+        const b = document.createElement('div');
+        b.className = 'bubble user';
+        b.innerHTML = escapeHtml(m.text);
+        const t = document.createElement('div');
+        t.className = 'bubble-time';
+        t.textContent = new Date(m.createdAt).toTimeString().slice(0, 8);
+        w.appendChild(b);
+        w.appendChild(t);
+        chatWindow.appendChild(w);
+        return;
+      }
+      const w = document.createElement('div');
+      w.className = 'msg-wrapper assistant';
+      const b = document.createElement('div');
+      b.className = 'bubble assistant';
+      renderAssistantBody(b, m, msgExports);
+      if (msgExports.length > 0) renderExportChips(b, msgExports);
+      const t = document.createElement('div');
+      t.className = 'bubble-time';
+      t.textContent = new Date(m.createdAt).toTimeString().slice(0, 8);
+      w.appendChild(b);
+      w.appendChild(t);
+      chatWindow.appendChild(w);
+    }
+
+    // 복원된 assistant 바디: attachment 형태별 분기 (data 포함 / 메타만 / text 만).
+    function renderAssistantBody(b, m, msgExports) {
+      const att = m.attachments;
+      if (att && Array.isArray(att.data)) {
+        renderResultData(b, {
+          count: att.rowCount ?? att.data.length,
+          data: att.data,
+          columns: att.columns ?? [],
+          dbTimeMs: att.dbTimeMs ?? 0,
+        }, null);
+        return;
+      }
+      if (att && typeof att.rowCount === 'number') {
+        const ref = document.createElement('div');
+        ref.className = 'attachment-ref';
+        const cols = Array.isArray(att.columns) && att.columns.length > 0
+          ? ` · columns: ${att.columns.map(c => c.label || c.key || c).join(', ')}`
+          : '';
+        const promoted = msgExports.some(e => e.messageId === m.id);
+        ref.textContent = `결과: ${att.rowCount}행${cols}${promoted ? ' (엑셀로 저장됨 — 아래 📎 재다운로드)' : ''}`;
+        b.appendChild(ref);
+        return;
+      }
+      if (m.text) {
+        const r = document.createElement('div');
+        r.className = 'result-text';
+        r.textContent = m.text;
+        b.appendChild(r);
+      }
+    }
+
+    function renderExportChips(parent, exports) {
+      const wrap = document.createElement('div');
+      wrap.className = 'export-chips';
+      for (const e of exports) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'export-chip';
+        const label = document.createElement('span');
+        const sizeText = formatBytes(e.fileSize);
+        const rowText = e.rowCount != null ? `, ${e.rowCount}행` : '';
+        label.textContent = `📎 ${e.fileName} (${sizeText}${rowText})`;
+        chip.appendChild(label);
+
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'export-chip-delete';
+        del.textContent = '×';
+        del.title = '삭제';
+        del.onclick = (ev) => {
+          ev.stopPropagation();
+          handleDeleteExport(e, chip);
+        };
+        chip.appendChild(del);
+
+        chip.onclick = () => { window.location.href = `/exports/${e.id}/download`; };
+        wrap.appendChild(chip);
+      }
+      parent.appendChild(wrap);
+    }
+
+    async function handleDeleteExport(exp, chipEl) {
+      if (!confirm(`"${exp.fileName}" 을 삭제할까요?`)) return;
+      const res = await api.deleteExport(exp.id);
+      if (!okOrNoContent(res)) { showToast('Export 삭제 실패'); return; }
+      chipEl.remove();
+      const list = state.exportsBySessionId.get(exp.sessionId) || [];
+      state.exportsBySessionId.set(exp.sessionId, list.filter(x => x.id !== exp.id));
+      renderSidebar();
+    }
+
+    // ── 초기 로드 ───────────────────────────────────────────────────────────────
+    (async () => {
+      await refreshSessions();
+      if (state.sessions.length > 0) {
+        await selectSession(state.sessions[0].id);
+      } else {
+        state.currentSessionId = null;
+        state.isViewingPast = false;
+        renderSidebar();
+      }
+    })();
+
+    newSessionBtn.addEventListener('click', async () => {
+      await createNewSession('');
+    });
 
     // 테이블 정보 모달
     const tableModal = document.getElementById('table-modal');
@@ -1068,13 +1598,17 @@
         setTimeout(() => { copyBtn.innerHTML = `${SVG_COPY} 복사`; copyBtn.classList.remove('copied'); }, 1500);
       };
 
-      const dlBtn = document.createElement('button');
-      dlBtn.className = 'action-btn';
-      dlBtn.innerHTML = `${SVG_DOWNLOAD} 엑셀`;
-      dlBtn.onclick = () => exportToExcel(requestId);
-
       actions.appendChild(copyBtn);
-      actions.appendChild(dlBtn);
+
+      // 엑셀 버튼은 /db-export 가 requestId → 쿼리 재실행이라, 복원된 메시지(requestId 없음)엔 비활성.
+      // 복원된 결과의 재다운로드는 Export 칩(#237) 사용.
+      if (requestId) {
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'action-btn';
+        dlBtn.innerHTML = `${SVG_DOWNLOAD} 엑셀`;
+        dlBtn.onclick = () => exportToExcel(requestId);
+        actions.appendChild(dlBtn);
+      }
       parentEl.appendChild(actions);
     }
 
@@ -1127,6 +1661,18 @@
       const limit = limitSelect.value === 'custom'
         ? (parseInt(limitCustom.value, 10) || 20)
         : parseInt(limitSelect.value, 10);
+
+      // 세션 준비: 활성 세션이 없거나 과거 Session 열람 중이면 자동 신규 생성 (에픽 #232 결정 요약 3번).
+      const past = isViewingPast();
+      if (!state.currentSessionId || past) {
+        try {
+          if (past) showToast('새 Session 을 시작합니다');
+          await createNewSession(message);
+        } catch {
+          showToast('새 Session 생성 실패');
+          return;
+        }
+      }
 
       userInput.value = '';
       userInput.style.height = 'auto';
@@ -1192,7 +1738,7 @@
         const response = await fetch('/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, requestId: currentRequestId, limit }),
+          body: JSON.stringify({ message, requestId: currentRequestId, limit, sessionId: state.currentSessionId }),
         });
 
         const reader = response.body.getReader();
@@ -1274,6 +1820,14 @@
         stopBtn.style.display = 'none';
         currentRequestId = null;
         userInput.focus();
+        // 세션 updatedAt / 메타 갱신 (서버가 /chat 안에서 user·assistant 메시지 자동 저장 — ADR 0002).
+        try {
+          if (state.currentSessionId) {
+            state.exportsBySessionId.delete(state.currentSessionId);
+          }
+          await refreshSessions();
+          renderSidebar();
+        } catch { /* 사이드바 갱신 실패해도 chat 흐름은 유지 */ }
       }
     }
 

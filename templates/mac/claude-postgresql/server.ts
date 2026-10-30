@@ -8,6 +8,7 @@ import path from 'path';
 import { loadAllSchemas } from './scripts/load-schema-index.js';
 import { analyzeSql } from './scripts/sql-analyze.js';
 import { buildColumnsFromSql, isSensitiveColumn } from './scripts/build-columns.js';
+import { openHistoryDb, HistoryDbValidationError, PROMOTED_REASON_SIZE_CAP, type PromotedAttachmentRef } from './scripts/history-db.js';
 
 // ── 환경 변수 ──────────────────────────────────────────────────────────────────
 
@@ -48,12 +49,15 @@ interface DbQueryBody {
 
 interface DbExportBody {
   requestId: string;
+  sessionId?: string;
+  messageId?: string;
 }
 
 interface ChatBody {
   message?: string;
   requestId?: string;
   limit?: number;
+  sessionId?: string;
 }
 
 interface CancelBody {
@@ -65,8 +69,11 @@ interface SqlStore {
   table: string;
 }
 
-type SseEventType = 'progress' | 'log' | 'query' | 'result-data' | 'result' | 'error' | 'cancelled';
+type SseEventType = 'progress' | 'log' | 'query' | 'result-data' | 'result' | 'error' | 'cancelled' | 'assistant-saved' | 'export-promoted';
 type SendFn = (type: SseEventType, msg: unknown) => void;
+
+// LLM 재주입용 attachment 메타의 단일 shape 정의 — 저장(/chat)과 조회(buildRecentContext)에서 공유.
+type AssistantAttachments = { columns: unknown; rowCount: number };
 
 interface QueryEventPayload {
   endpoint: '/db-query';
@@ -363,6 +370,7 @@ app.use(express.static(path.join(import.meta.dirname, 'public')));
 
 const activeJobs: Map<string, ChildProcess> = new Map();
 const sqlStore: Map<string, SqlStore> = new Map();
+const historyDb = openHistoryDb(import.meta.dirname);
 
 // ── 엔드포인트 ────────────────────────────────────────────────────────────────
 
@@ -408,7 +416,7 @@ app.post('/db-query', async (req: Request<object, object, DbQueryBody>, res: Res
 });
 
 app.post('/db-export', async (req: Request<object, object, DbExportBody>, res: Response) => {
-  const { requestId } = req.body;
+  const { requestId, sessionId, messageId } = req.body;
   const stored: SqlStore | undefined = sqlStore.get(requestId) ?? sqlStore.get('__latest__');
   if (!stored) return res.status(404).json({ error: '조회 파라미터를 찾을 수 없습니다. 먼저 검색을 실행해 주세요.' });
 
@@ -419,6 +427,30 @@ app.post('/db-export', async (req: Request<object, object, DbExportBody>, res: R
     const rawData: Record<string, unknown>[] = (result.rows ?? []) as Record<string, unknown>[];
     const data: Record<string, unknown>[] = removeSensitiveColumns(rawData);
     console.log(`${ts()} [엑셀 내보내기] ${stored.table} ${data.length}건`);
+
+    // ADR 0003: 세션 지정 시 서버 측 xlsx 생성·저장 → downloadUrl 로 응답.
+    if (sessionId) {
+      try {
+        const gen = historyDb.generateAndSaveXlsx(
+          sessionId,
+          messageId ?? null,
+          data,
+          JSON.stringify({ sql: stored.sql, table: stored.table }),
+        );
+        return res.json({
+          exportId: gen.exportId,
+          downloadUrl: `/exports/${gen.exportId}/download`,
+          fileName: gen.fileName,
+          fileSize: gen.fileSize,
+          rowCount: gen.rowCount,
+          count: data.length,
+          collection: stored.table,
+        });
+      } catch (e) {
+        return handleHistoryError(res, e);
+      }
+    }
+
     return res.json({ count: data.length, data, collection: stored.table });
   } catch (err) {
     if (isTimeoutError(err)) return res.status(504).json({ error: DB_TIMEOUT_MSG });
@@ -442,9 +474,45 @@ app.post('/chat/cancel', (req: Request<object, object, CancelBody>, res: Respons
   }
 });
 
+// ADR 0002: 직전 N 턴(user+assistant 쌍) 메타만 LLM 프롬프트에 prepend.
+const RECENT_TURNS: number = 5;
+const RECENT_MESSAGE_LIMIT: number = RECENT_TURNS * 2;
+
+function buildRecentContext(sessionId: string): string {
+  const recent = historyDb.getRecentMessages(sessionId, RECENT_MESSAGE_LIMIT);
+  if (recent.length === 0) return '';
+
+  const lines: string[] = ['[최근 대화 기록]'];
+  for (const m of recent) {
+    if (m.role === 'user') {
+      lines.push(`User: ${m.text}`);
+      continue;
+    }
+    if (m.generatedQuery) lines.push(`Query: ${m.generatedQuery}`);
+    const att = (m.attachments ?? {}) as Partial<AssistantAttachments>;
+    const colsText: string = Array.isArray(att.columns) ? JSON.stringify(att.columns) : '[]';
+    const rc: number = typeof att.rowCount === 'number' ? att.rowCount : 0;
+    lines.push(`Result: ${rc} rows, columns: ${colsText}`);
+    if (m.text) lines.push(`Assistant: ${m.text}`);
+  }
+  lines.push('[최근 대화 기록 끝]');
+  return lines.join('\n');
+}
+
 app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
-  const { message, requestId, limit = 20 } = req.body;
+  const { message, requestId, limit = 20, sessionId } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: '메시지를 입력해 주세요.' });
+
+  // ADR 0002: 세션 지정 시에만 recent context 조립 + user 메시지 영속화.
+  let recentContext = '';
+  if (sessionId !== undefined) {
+    try {
+      recentContext = buildRecentContext(sessionId);
+      historyDb.insertMessage(sessionId, { role: 'user', text: message.trim() });
+    } catch (e) {
+      return handleHistoryError(res, e);
+    }
+  }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -461,10 +529,14 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
   console.log(`[요청] ${message.trim()}`);
   console.log(`${'─'.repeat(60)}`);
 
+  const promptText: string = recentContext
+    ? `${recentContext}\n\n${message.trim()}`
+    : message.trim();
+
   const child: ChildProcess = spawn(
     'claude',
     [
-      '-p', message.trim(),
+      '-p', promptText,
       '--allowedTools', '__none__',
       '--system-prompt', buildSystemPrompt(limit),
       '--output-format', 'stream-json',
@@ -542,13 +614,62 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
     console.log(`${ts()} [조회 시작]  /db-query`);
     console.log(`             ${JSON.stringify(parsed)}`);
 
+    let assistantAttachments: AssistantAttachments | null = null;
+    let dataForPromotion: Record<string, unknown>[] | null = null;
     try {
       const { body, effectiveSql, table } = await executeSqlInternal(parsed.sql, parsed.limit ?? limit);
       if (requestId) sqlStore.set(requestId, { sql: effectiveSql, table });
       sqlStore.set('__latest__', { sql: effectiveSql, table });
       send('result-data', body as unknown as ResultDataEventPayload);
       send('progress', `DB 응답 완료 — ${body.count}건 / ${(body.dbTimeMs / 1000).toFixed(2)}초`);
+      assistantAttachments = { columns: body.columns, rowCount: body.count };
+      dataForPromotion = body.data;
       send('result', '');
+
+      if (sessionId && assistantAttachments) {
+        try {
+          const assistantMessageId = historyDb.insertMessage(sessionId, {
+            role: 'assistant',
+            text: '',
+            generatedQuery: JSON.stringify(parsed),
+            attachments: assistantAttachments,
+          });
+          send('assistant-saved', { messageId: assistantMessageId });
+
+          const dataByteSize = dataForPromotion && dataForPromotion.length > 0
+            ? Buffer.byteLength(JSON.stringify(dataForPromotion))
+            : 0;
+          if (dataForPromotion && historyDb.shouldPromoteToExport(dataByteSize)) {
+            try {
+              const gen = historyDb.generateAndSaveXlsx(
+                sessionId,
+                assistantMessageId,
+                dataForPromotion,
+                JSON.stringify(parsed),
+              );
+              const promoted: PromotedAttachmentRef = {
+                type: 'table-ref',
+                exportId: gen.exportId,
+                columns: assistantAttachments.columns,
+                rowCount: assistantAttachments.rowCount,
+                promotedReason: PROMOTED_REASON_SIZE_CAP,
+              };
+              historyDb.updateMessageAttachments(assistantMessageId, promoted);
+              send('export-promoted', {
+                messageId: assistantMessageId,
+                exportId: gen.exportId,
+                fileName: gen.fileName,
+                fileSize: gen.fileSize,
+                rowCount: gen.rowCount,
+              });
+            } catch (e) {
+              console.error('[history-db] Export 승격 실패:', e);
+            }
+          }
+        } catch (e) {
+          console.error('[history-db] assistant 메시지 저장 실패:', e);
+        }
+      }
     } catch (err) {
       const msg: string = isTimeoutError(err) ? DB_TIMEOUT_MSG : (err as Error).message;
       console.error(`[DB 오류] ${msg}`);
@@ -581,6 +702,139 @@ function killPort(port: string): void {
   } catch { /* 점유 없음 */ }
 }
 
+// ── Session · Message · Export 엔드포인트 ────────────────────────────────────
+
+interface SessionCreateBody { firstQuery?: unknown }
+interface SessionRenameBody { title?: unknown }
+interface MessageCreateBody {
+  role?: unknown;
+  text?: unknown;
+  generatedQuery?: unknown;
+  attachments?: unknown;
+}
+
+function sendError(res: Response, status: number, message: string): void {
+  res.status(status).json({ error: message });
+}
+
+function handleHistoryError(res: Response, e: unknown): void {
+  if (e instanceof HistoryDbValidationError) {
+    sendError(res, 400, e.message);
+    return;
+  }
+  console.error('[history-db]', e);
+  sendError(res, 500, e instanceof Error ? e.message : String(e));
+}
+
+app.get('/sessions', (_req: Request, res: Response) => {
+  res.json(historyDb.listSessions());
+});
+
+app.post('/sessions', (req: Request<object, object, SessionCreateBody>, res: Response) => {
+  const firstQuery = typeof req.body.firstQuery === 'string' ? req.body.firstQuery : '';
+  const session = historyDb.createSession(firstQuery);
+  res.status(201).json(session);
+});
+
+app.patch('/sessions/:id', (req: Request<{ id: string }, object, SessionRenameBody>, res: Response) => {
+  const title = typeof req.body.title === 'string' ? req.body.title.trim() : '';
+  if (!title) {
+    sendError(res, 400, 'title 은 비어있을 수 없습니다');
+    return;
+  }
+  try {
+    historyDb.renameSession(req.params.id, title);
+    res.status(204).end();
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
+app.delete('/sessions/:id', (req: Request<{ id: string }>, res: Response) => {
+  try {
+    historyDb.deleteSession(req.params.id);
+    res.status(204).end();
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
+app.get('/sessions/:id/messages', (req: Request<{ id: string }>, res: Response) => {
+  try {
+    res.json(historyDb.listMessages(req.params.id));
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
+app.post('/sessions/:id/messages', (req: Request<{ id: string }, object, MessageCreateBody>, res: Response) => {
+  const { role, text, generatedQuery, attachments } = req.body;
+  if (role !== 'user' && role !== 'assistant') {
+    sendError(res, 400, 'role 은 user 또는 assistant 여야 합니다');
+    return;
+  }
+  if (typeof text !== 'string') {
+    sendError(res, 400, 'text 는 문자열이어야 합니다');
+    return;
+  }
+  let generatedQueryValue: string | null | undefined;
+  if (typeof generatedQuery === 'string') generatedQueryValue = generatedQuery;
+  else if (generatedQuery === null) generatedQueryValue = null;
+  else generatedQueryValue = undefined;
+  try {
+    const messageId = historyDb.insertMessage(req.params.id, {
+      role,
+      text,
+      generatedQuery: generatedQueryValue,
+      attachments,
+    });
+    res.status(201).json({ id: messageId });
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
+app.get('/sessions/:id/exports', (req: Request<{ id: string }>, res: Response) => {
+  try {
+    res.json(historyDb.listExports(req.params.id));
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
+app.get('/exports/:id/download', (req: Request<{ id: string }>, res: Response) => {
+  let exp;
+  try {
+    exp = historyDb.getExport(req.params.id);
+  } catch (e) {
+    handleHistoryError(res, e);
+    return;
+  }
+  if (!exp) {
+    sendError(res, 404, 'export not found');
+    return;
+  }
+  const abs = path.resolve(import.meta.dirname, exp.filePath);
+  res.download(abs, exp.fileName, (err): void => {
+    if (!err) return;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      try { historyDb.deleteExport(req.params.id); } catch { /* 레코드 정리 실패해도 404 유지 */ }
+      if (!res.headersSent) sendError(res, 404, 'file not found');
+      return;
+    }
+    if (!res.headersSent) sendError(res, 500, '파일 전송 실패');
+  });
+});
+
+app.delete('/exports/:id', (req: Request<{ id: string }>, res: Response) => {
+  try {
+    historyDb.deleteExport(req.params.id);
+    res.status(204).end();
+  } catch (e) {
+    handleHistoryError(res, e);
+  }
+});
+
 async function startServer(): Promise<void> {
   const client: PoolClient = await pool.connect();
   client.release();
@@ -588,6 +842,14 @@ async function startServer(): Promise<void> {
 
   const server: Server = app.listen(Number(PORT), (): void => {
     console.log(`서버 실행 중: http://localhost:${PORT}`);
+    setImmediate((): void => {
+      const orphans = historyDb.cleanupOrphans();
+      if (orphans.orphanFiles > 0 || orphans.orphanRecords > 0) {
+        console.log(
+          `[history-db] 고아 정리: files=${orphans.orphanFiles} records=${orphans.orphanRecords}`,
+        );
+      }
+    });
   });
 
   server.on('error', (err: NodeJS.ErrnoException): void => {
@@ -611,14 +873,12 @@ startServer().catch((err: Error): void => {
   process.exit(1);
 });
 
-process.on('SIGINT', async (): Promise<void> => {
+async function shutdown(): Promise<void> {
+  historyDb.close();
   await pool.end();
   console.log('PostgreSQL 풀 종료');
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', async (): Promise<void> => {
-  await pool.end();
-  console.log('PostgreSQL 풀 종료');
-  process.exit(0);
-});
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

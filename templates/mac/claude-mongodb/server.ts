@@ -82,6 +82,7 @@ interface ChatBody {
   message?: string;
   requestId?: string;
   limit?: number;
+  sessionId?: string;
 }
 
 interface CancelBody {
@@ -824,11 +825,52 @@ app.post('/chat/cancel', (req: Request<object, object, CancelBody>, res: Respons
   }
 });
 
+// ADR 0002: 직전 N 턴(user+assistant 쌍) 메타만 LLM 프롬프트에 prepend.
+// 데이터 행은 포함 금지. 홀로 남은 user(짝 assistant 없음)는 그대로 포함 — 포맷이 자연스럽게 처리.
+const RECENT_TURNS: number = 5;
+const RECENT_MESSAGE_LIMIT: number = RECENT_TURNS * 2;
+
+// LLM 재주입용 attachment 메타의 단일 shape 정의 — 저장(/chat)과 조회(buildRecentContext)에서 공유.
+// 미래에 메타 필드가 추가되어도 이 타입만 수정하면 양쪽에 전파.
+type AssistantAttachments = { columns: unknown; rowCount: number };
+
+function buildRecentContext(sessionId: string): string {
+  const recent = historyDb.getRecentMessages(sessionId, RECENT_MESSAGE_LIMIT);
+  if (recent.length === 0) return '';
+
+  const lines: string[] = ['[최근 대화 기록]'];
+  for (const m of recent) {
+    if (m.role === 'user') {
+      lines.push(`User: ${m.text}`);
+      continue;
+    }
+    if (m.generatedQuery) lines.push(`Query: ${m.generatedQuery}`);
+    const att = (m.attachments ?? {}) as Partial<AssistantAttachments>;
+    const colsText: string = Array.isArray(att.columns) ? JSON.stringify(att.columns) : '[]';
+    const rc: number = typeof att.rowCount === 'number' ? att.rowCount : 0;
+    lines.push(`Result: ${rc} rows, columns: ${colsText}`);
+    if (m.text) lines.push(`Assistant: ${m.text}`);
+  }
+  lines.push('[최근 대화 기록 끝]');
+  return lines.join('\n');
+}
+
 app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
-  const { message, requestId, limit = 20 } = req.body;
+  const { message, requestId, limit = 20, sessionId } = req.body;
 
   if (!message?.trim()) {
     return res.status(400).json({ error: '메시지를 입력해 주세요.' });
+  }
+
+  // ADR 0002: 세션 지정 시에만 recent context 조립 + user 메시지 영속화.
+  let recentContext = '';
+  if (sessionId !== undefined) {
+    try {
+      recentContext = buildRecentContext(sessionId);
+      historyDb.insertMessage(sessionId, { role: 'user', text: message.trim() });
+    } catch (e) {
+      return handleHistoryError(res, e);
+    }
   }
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -846,10 +888,14 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
   console.log(`[요청] ${message.trim()}`);
   console.log(`${'─'.repeat(60)}`);
 
+  const promptText: string = recentContext
+    ? `${recentContext}\n\n${message.trim()}`
+    : message.trim();
+
   const child: ChildProcess = spawn(
     'claude',
     [
-      '-p', message.trim(),
+      '-p', promptText,
       // 도구 전면 차단 — allowlist 에 존재하지 않는 이름만 넣어 실질적으로 어떤 도구도 허용하지 않는다.
       // denylist 방식은 미래에 새 도구가 추가되면 자동 허용될 위험이 있어 allowlist 로 잠근다.
       // 목적: LLM 이 DB 응답/스키마/파일/네트워크 어떤 채널로도 결과를 볼 수 없게 한다.
@@ -928,6 +974,7 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
     send('progress', `조회 시작 — DB ${parsed.kind === 'aggregate' ? '집계' : '쿼리'} 실행 중...`);
     console.log(`${ts()} [조회 시작]  ${endpoint}`);
 
+    let assistantAttachments: AssistantAttachments | null = null;
     try {
       if (parsed.kind === 'query') {
         if (!parsed.collection) throw new Error('collection 필드 누락');
@@ -949,6 +996,7 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
         }
         send('result-data', body as unknown as ResultDataEventPayload);
         send('progress', `DB 응답 완료 — ${body.count}건 / ${(body.dbTimeMs / 1000).toFixed(2)}초`);
+        assistantAttachments = { columns: body.columns, rowCount: body.count };
       } else {
         if (!parsed.collection) throw new Error('collection 필드 누락');
         if (!Array.isArray(parsed.pipeline) || parsed.pipeline.length === 0) throw new Error('pipeline 배열 누락');
@@ -966,8 +1014,24 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
         }
         send('result-data', body as unknown as ResultDataEventPayload);
         send('progress', `DB 응답 완료 — ${body.count}건 / ${(body.dbTimeMs / 1000).toFixed(2)}초`);
+        assistantAttachments = { columns: body.columns, rowCount: body.count };
       }
       send('result', '');
+
+      // ADR 0002: assistant 메시지 자동 저장. attachments 는 columns · rowCount 메타만
+      // (data 는 미포함 — LLM 재주입 시 민감 데이터 유출 방지).
+      if (sessionId && assistantAttachments) {
+        try {
+          historyDb.insertMessage(sessionId, {
+            role: 'assistant',
+            text: '',
+            generatedQuery: JSON.stringify(parsed),
+            attachments: assistantAttachments,
+          });
+        } catch (e) {
+          console.error('[history-db] assistant 메시지 저장 실패:', e);
+        }
+      }
     } catch (err) {
       const msg: string = isTimeoutError(err) ? DB_TIMEOUT_MSG : (err as Error).message;
       console.error(`[DB 오류] ${msg}`);

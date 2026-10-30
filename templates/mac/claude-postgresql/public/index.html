@@ -931,12 +931,19 @@
     }
 
     // ── 사이드바 렌더 ───────────────────────────────────────────────────────────
+    function formatCreatedAt(ts) {
+      const d = new Date(ts);
+      const p = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} 생성`;
+    }
+
     function renderSidebar() {
       sidebarList.innerHTML = '';
       for (const s of state.sessions) {
         const item = document.createElement('div');
         item.className = 'session-item' + (s.id === state.currentSessionId ? ' active' : '');
         item.dataset.id = s.id;
+        item.title = formatCreatedAt(s.createdAt);
 
         const title = document.createElement('div');
         title.className = 'session-title';
@@ -1115,6 +1122,14 @@
     // 복원된 assistant 바디: attachment 형태별 분기 (data 포함 / 메타만 / text 만).
     function renderAssistantBody(b, m, msgExports) {
       const att = m.attachments;
+
+      // 라이브와 동일한 진행 과정 재생 — progressLog 가 있으면 bubble 을 progress 모드로.
+      if (att && Array.isArray(att.progressLog) && att.progressLog.length > 0) {
+        b.classList.add('progress');
+        replayProgressLog(b, att.progressLog, att);
+        return;
+      }
+
       if (att && Array.isArray(att.data)) {
         renderResultData(b, {
           count: att.rowCount ?? att.data.length,
@@ -1140,6 +1155,53 @@
         r.className = 'result-text';
         r.textContent = m.text;
         b.appendChild(r);
+      }
+    }
+
+    // 복원 재생: live 때 쌓이던 progress-step · progress-log · result-divider · result-data · result-text 를 순서대로 재구성.
+    // live 와 달리 타이프라이터 애니메이션 없이 즉시 렌더. 모든 progress-step 은 완료 상태(✓)로 표시.
+    function replayProgressLog(bubble, log, att) {
+      let resultRendered = false;
+      for (const entry of log) {
+        if (entry.type === 'progress') {
+          const step = document.createElement('div');
+          step.className = 'progress-step done';
+          const spinner = document.createElement('span');
+          spinner.className = 'spinner';
+          const timeSpan = document.createElement('span');
+          timeSpan.className = 'step-time';
+          timeSpan.textContent = entry.time;
+          const textSpan = document.createElement('span');
+          textSpan.textContent = entry.message || '';
+          step.appendChild(spinner);
+          step.appendChild(timeSpan);
+          step.appendChild(textSpan);
+          bubble.appendChild(step);
+        } else if (entry.type === 'log') {
+          const log = document.createElement('div');
+          log.className = 'progress-log';
+          log.textContent = entry.message || '';
+          bubble.appendChild(log);
+        } else if (entry.type === 'result-data') {
+          if (att && Array.isArray(att.data)) {
+            renderResultData(bubble, {
+              count: att.rowCount ?? att.data.length,
+              data: att.data,
+              columns: att.columns ?? [],
+              dbTimeMs: att.dbTimeMs ?? 0,
+            }, null);
+            resultRendered = true;
+          }
+        } else if (entry.type === 'result') {
+          const text = entry.message || '';
+          if (resultRendered || !text.trim()) continue;
+          const d = document.createElement('hr'); d.className = 'result-divider'; bubble.appendChild(d);
+          const r = document.createElement('div'); r.className = 'result-text'; r.textContent = text; bubble.appendChild(r);
+        } else if (entry.type === 'cancelled' || entry.type === 'error') {
+          const d = document.createElement('hr'); d.className = 'result-divider'; bubble.appendChild(d);
+          const r = document.createElement('div'); r.className = 'result-text'; r.textContent = entry.message || ''; bubble.appendChild(r);
+        }
+        // 'query' 는 live 에서도 추가 렌더 안 함
       }
     }
 
@@ -1195,8 +1257,13 @@
       }
     })();
 
-    newSessionBtn.addEventListener('click', async () => {
-      await createNewSession('');
+    // 세션 생성 트리거는 "자연어 입력" 시점 (sendMessage) — 버튼은 입력 대기 상태로 전환만.
+    newSessionBtn.addEventListener('click', () => {
+      state.currentSessionId = null;
+      pastSessionBanner.style.display = 'none';
+      clearChatWindow();
+      renderSidebar();
+      userInput.focus();
     });
 
     // 테이블 정보 모달
@@ -1848,6 +1915,10 @@
           await refreshSessions();
           renderSidebar();
         } catch { /* 사이드바 갱신 실패해도 chat 흐름은 유지 */ }
+        // 세션명 LLM 요약이 백그라운드 진행 중이므로 3초 뒤 한 번 더 refresh 해 요약된 title 반영.
+        setTimeout(async () => {
+          try { await refreshSessions(); renderSidebar(); } catch {}
+        }, 3000);
       }
     }
 

@@ -8,7 +8,7 @@ import path from 'path';
 import { loadAllSchemas } from './scripts/load-schema-index.js';
 import { analyzePipeline } from './scripts/pipeline-analyze.js';
 import { buildColumnsFromQuery, buildColumnsFromPipeline } from './scripts/build-columns.js';
-import { openHistoryDb, HistoryDbValidationError } from './scripts/history-db.js';
+import { openHistoryDb, HistoryDbValidationError, PROMOTED_REASON_SIZE_CAP, type PromotedAttachmentRef } from './scripts/history-db.js';
 
 // ── 환경 변수 ──────────────────────────────────────────────────────────────────
 
@@ -76,6 +76,8 @@ interface DbAggregateBody {
 
 interface DbExportBody {
   requestId: string;
+  sessionId?: string;
+  messageId?: string;
 }
 
 interface ChatBody {
@@ -89,7 +91,7 @@ interface CancelBody {
   requestId: string;
 }
 
-type SseEventType = 'progress' | 'log' | 'query' | 'result-data' | 'result' | 'error' | 'cancelled';
+type SseEventType = 'progress' | 'log' | 'query' | 'result-data' | 'result' | 'error' | 'cancelled' | 'assistant-saved' | 'export-promoted';
 type SendFn = (type: SseEventType, msg: unknown) => void;
 
 interface QueryEventPayload {
@@ -769,7 +771,7 @@ app.post('/db-aggregate', async (req: Request<object, object, DbAggregateBody>, 
 });
 
 app.post('/db-export', async (req: Request<object, object, DbExportBody>, res: Response) => {
-  const { requestId } = req.body;
+  const { requestId, sessionId, messageId } = req.body;
   const params: QueryParams | undefined = queryParamsStore.get(requestId) ?? queryParamsStore.get('__latest__');
   if (!params) {
     return res.status(404).json({ error: '조회 파라미터를 찾을 수 없습니다. 먼저 검색을 실행해 주세요.' });
@@ -801,6 +803,31 @@ app.post('/db-export', async (req: Request<object, object, DbExportBody>, res: R
     }
 
     console.log(`${ts()} [엑셀 내보내기] ${collection} ${docs.length}건`);
+
+    // ADR 0003: 세션 지정 시 서버 측 xlsx 생성·저장 → downloadUrl 로 응답.
+    // 세션 미지정 (스탠드얼론 호출) 은 레거시 호환 — raw data 를 반환해 호출자 측 생성.
+    if (sessionId) {
+      try {
+        const gen = historyDb.generateAndSaveXlsx(
+          sessionId,
+          messageId ?? null,
+          docs as Record<string, unknown>[],
+          JSON.stringify({ collection, filter, projection, sort, pipeline }),
+        );
+        return res.json({
+          exportId: gen.exportId,
+          downloadUrl: `/exports/${gen.exportId}/download`,
+          fileName: gen.fileName,
+          fileSize: gen.fileSize,
+          rowCount: gen.rowCount,
+          count: docs.length,
+          collection,
+        });
+      } catch (e) {
+        return handleHistoryError(res, e);
+      }
+    }
+
     return res.json({ count: docs.length, data: docs, collection });
   } catch (err) {
     if (isTimeoutError(err)) {
@@ -975,6 +1002,7 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
     console.log(`${ts()} [조회 시작]  ${endpoint}`);
 
     let assistantAttachments: AssistantAttachments | null = null;
+    let dataForPromotion: Document[] | null = null;
     try {
       if (parsed.kind === 'query') {
         if (!parsed.collection) throw new Error('collection 필드 누락');
@@ -997,6 +1025,7 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
         send('result-data', body as unknown as ResultDataEventPayload);
         send('progress', `DB 응답 완료 — ${body.count}건 / ${(body.dbTimeMs / 1000).toFixed(2)}초`);
         assistantAttachments = { columns: body.columns, rowCount: body.count };
+        dataForPromotion = body.data;
       } else {
         if (!parsed.collection) throw new Error('collection 필드 누락');
         if (!Array.isArray(parsed.pipeline) || parsed.pipeline.length === 0) throw new Error('pipeline 배열 누락');
@@ -1015,19 +1044,52 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
         send('result-data', body as unknown as ResultDataEventPayload);
         send('progress', `DB 응답 완료 — ${body.count}건 / ${(body.dbTimeMs / 1000).toFixed(2)}초`);
         assistantAttachments = { columns: body.columns, rowCount: body.count };
+        dataForPromotion = body.data;
       }
       send('result', '');
 
-      // ADR 0002: assistant 메시지 자동 저장. attachments 는 columns · rowCount 메타만
-      // (data 는 미포함 — LLM 재주입 시 민감 데이터 유출 방지).
+      // ADR 0002: assistant 메시지 저장 (data 미포함 메타만).
+      // ADR 0001: data 가 10MB 상한 초과 시 자동 Export 승격 → attachments 를 table-ref 로 전환.
       if (sessionId && assistantAttachments) {
         try {
-          historyDb.insertMessage(sessionId, {
+          const assistantMessageId = historyDb.insertMessage(sessionId, {
             role: 'assistant',
             text: '',
             generatedQuery: JSON.stringify(parsed),
             attachments: assistantAttachments,
           });
+          send('assistant-saved', { messageId: assistantMessageId });
+
+          const dataByteSize = dataForPromotion && dataForPromotion.length > 0
+            ? Buffer.byteLength(JSON.stringify(dataForPromotion))
+            : 0;
+          if (dataForPromotion && historyDb.shouldPromoteToExport(dataByteSize)) {
+            try {
+              const gen = historyDb.generateAndSaveXlsx(
+                sessionId,
+                assistantMessageId,
+                dataForPromotion as Record<string, unknown>[],
+                JSON.stringify(parsed),
+              );
+              const promoted: PromotedAttachmentRef = {
+                type: 'table-ref',
+                exportId: gen.exportId,
+                columns: assistantAttachments.columns,
+                rowCount: assistantAttachments.rowCount,
+                promotedReason: PROMOTED_REASON_SIZE_CAP,
+              };
+              historyDb.updateMessageAttachments(assistantMessageId, promoted);
+              send('export-promoted', {
+                messageId: assistantMessageId,
+                exportId: gen.exportId,
+                fileName: gen.fileName,
+                fileSize: gen.fileSize,
+                rowCount: gen.rowCount,
+              });
+            } catch (e) {
+              console.error('[history-db] Export 승격 실패:', e);
+            }
+          }
         } catch (e) {
           console.error('[history-db] assistant 메시지 저장 실패:', e);
         }

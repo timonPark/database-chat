@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Claude Mongo Chat</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
@@ -1370,32 +1369,39 @@
     const SVG_CHECK = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
     const SVG_DOWNLOAD = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
 
-    async function exportToExcel(requestId) {
+    // ADR 0003: 서버가 xlsx 생성·저장, 응답의 downloadUrl 로 브라우저가 다운로드 트리거.
+    // 라이브 메시지에서만 호출됨 (복원 메시지는 Export 칩 사용). bubble.dataset.messageId 는
+    // assistant-saved SSE 이벤트가 세팅.
+    async function exportToExcel(requestId, bubble) {
       try {
         const res = await fetch('/db-export', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ requestId }),
+          body: JSON.stringify({
+            requestId,
+            sessionId: state.currentSessionId ?? undefined,
+            messageId: bubble?.dataset.messageId || undefined,
+          }),
         });
         const json = await res.json();
         if (!res.ok) { alert(json.error || '내보내기 실패'); return; }
-        if (!json.data || json.data.length === 0) { alert('다운로드할 데이터가 없습니다.'); return; }
+        if (!json.downloadUrl) { alert('다운로드 링크를 받지 못했습니다.'); return; }
 
-        // 중첩 객체·배열은 JSON 문자열로 평탄화
-        const rows = json.data.map(doc => {
-          const flat = {};
-          for (const [k, v] of Object.entries(doc)) {
-            flat[k] = (v !== null && typeof v === 'object') ? JSON.stringify(v) : v;
-          }
-          return flat;
-        });
+        window.location.href = json.downloadUrl;
 
-        const ws = XLSX.utils.json_to_sheet(rows);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, '조회결과');
-        const ts = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-        const collectionName = json.collection || '조회결과';
-        XLSX.writeFile(wb, `${collectionName}_${ts}.xlsx`);
+        if (bubble && json.exportId) {
+          renderExportChips(bubble, [{
+            id: json.exportId,
+            sessionId: state.currentSessionId,
+            messageId: bubble.dataset.messageId || null,
+            fileName: json.fileName,
+            fileSize: json.fileSize,
+            rowCount: json.rowCount,
+          }]);
+        }
+        state.exportsBySessionId.delete(state.currentSessionId);
+        await refreshSessions();
+        renderSidebar();
       } catch (e) {
         alert('엑셀 내보내기 중 오류가 발생했습니다.');
       }
@@ -1601,12 +1607,12 @@
       actions.appendChild(copyBtn);
 
       // 엑셀 버튼은 /db-export 가 requestId → 쿼리 재실행이라, 복원된 메시지(requestId 없음)엔 비활성.
-      // 복원된 결과의 재다운로드는 Export 칩(#237) 사용.
+      // 복원된 결과의 재다운로드는 Export 칩 사용. bubble (= parentEl) 을 넘겨 dataset.messageId 로 link.
       if (requestId) {
         const dlBtn = document.createElement('button');
         dlBtn.className = 'action-btn';
         dlBtn.innerHTML = `${SVG_DOWNLOAD} 엑셀`;
-        dlBtn.onclick = () => exportToExcel(requestId);
+        dlBtn.onclick = () => exportToExcel(requestId, parentEl);
         actions.appendChild(dlBtn);
       }
       parentEl.appendChild(actions);
@@ -1805,6 +1811,20 @@
                 const d3 = document.createElement('hr'); d3.className = 'result-divider'; bubble.appendChild(d3);
                 const r3 = document.createElement('div'); r3.className = 'result-text'; r3.textContent = event.message; bubble.appendChild(r3);
                 assistantTime.textContent = nowHMS();
+              } else if (event.type === 'assistant-saved') {
+                // 서버가 assistant 메시지 저장 완료 — 다운로드 버튼이 dataset.messageId 로 Export 를 link 함.
+                if (event.data?.messageId) bubble.dataset.messageId = event.data.messageId;
+              } else if (event.type === 'export-promoted') {
+                // 10MB 상한 초과로 서버가 자동 Export 승격 — 라이브 버블에 📎 칩 즉시 렌더.
+                const ep = event.data || {};
+                renderExportChips(bubble, [{
+                  id: ep.exportId,
+                  sessionId: state.currentSessionId,
+                  messageId: ep.messageId,
+                  fileName: ep.fileName,
+                  fileSize: ep.fileSize,
+                  rowCount: ep.rowCount,
+                }]);
               }
               chatWindow.scrollTop = chatWindow.scrollHeight;
             } catch (_) {}

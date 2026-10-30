@@ -58,8 +58,21 @@ export interface ExportRow extends ExportInput {
 export interface GeneratedExport {
   exportId: string;
   filePath: string;
+  fileName: string;
   fileSize: number;
   rowCount: number;
+}
+
+// ADR 0001: data 가 10MB 상한 초과 시 서버가 자동 Export 로 승격하고
+// messages.attachments 는 아래 참조 shape 로 교체 (data 는 LLM 에 노출 금지).
+export const PROMOTED_REASON_SIZE_CAP = 'size-cap';
+
+export interface PromotedAttachmentRef {
+  type: 'table-ref';
+  exportId: string;
+  columns: unknown;
+  rowCount: number;
+  promotedReason: typeof PROMOTED_REASON_SIZE_CAP;
 }
 
 export interface OrphanCleanupResult {
@@ -78,6 +91,7 @@ export interface HistoryDb {
   deleteSession(id: string): void;
 
   insertMessage(sessionId: string, msg: MessageInput): string;
+  updateMessageAttachments(messageId: string, attachments: unknown): void;
   listMessages(sessionId: string): MessageRow[];
   getRecentMessages(sessionId: string, limit: number): MessageRow[];
 
@@ -246,6 +260,9 @@ export function openHistoryDb(projectRoot: string): HistoryDb {
       `INSERT INTO messages
          (id, session_id, role, text, generated_query, attachments, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ),
+    updateMessageAttachments: db.prepare(
+      'UPDATE messages SET attachments = ? WHERE id = ?',
     ),
     listMessages: db.prepare(
       `SELECT ${MESSAGE_SELECT_COLS}
@@ -455,6 +472,12 @@ export function openHistoryDb(projectRoot: string): HistoryDb {
       return id;
     },
 
+    updateMessageAttachments(messageId, attachments) {
+      assertUuid(messageId, 'messageId');
+      const json = attachments == null ? null : JSON.stringify(attachments);
+      stmts.updateMessageAttachments.run(json, messageId);
+    },
+
     listMessages(sessionId) {
       assertUuid(sessionId, 'sessionId');
       return (stmts.listMessages.all(sessionId) as RawMessageRow[]).map(mapMessageRow);
@@ -528,7 +551,7 @@ export function openHistoryDb(projectRoot: string): HistoryDb {
         queryText,
       });
 
-      return { exportId, filePath: rel, fileSize, rowCount: rows.length };
+      return { exportId, filePath: rel, fileName, fileSize, rowCount: rows.length };
     },
 
     shouldPromoteToExport(dataByteSize) {

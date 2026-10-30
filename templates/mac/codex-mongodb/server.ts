@@ -101,8 +101,13 @@ type SseEventType = 'progress' | 'log' | 'query' | 'result-data' | 'result' | 'e
 type SendFn = (type: SseEventType, msg: unknown) => void;
 
 // LLM 재주입용 attachment 메타의 단일 shape 정의 — 저장(/chat)과 조회(buildRecentContext)에서 공유.
-// 미래에 메타 필드가 추가되어도 이 타입만 수정하면 양쪽에 전파.
-type AssistantAttachments = { columns: unknown; rowCount: number };
+// ADR 0002: buildRecentContext 는 columns/rowCount 만 destructure 하므로 data·progressLog 는 LLM 미노출 유지.
+type AssistantAttachments = {
+  columns: unknown;
+  rowCount: number;
+  data?: unknown;
+  progressLog?: Array<{ type: string; time: string; message?: string; data?: unknown }>;
+};
 
 interface QueryEventPayload {
   endpoint: '/db-query' | '/db-aggregate';
@@ -818,6 +823,55 @@ function buildRecentContext(sessionId: string): string {
   return lines.join('\n');
 }
 
+// 첫 자연어 질의를 LLM 요약 → 세션명 자동 설정. 별도 codex 호출, read-only sandbox, --ephemeral.
+// 실패해도 기존 title (truncation 결과) 유지. 백그라운드로만 호출되므로 /chat 흐름에 영향 없음.
+async function summarizeAndRenameSession(sessionId: string, firstQuery: string): Promise<void> {
+  const prompt = `사용자의 자연어 데이터 조회 질의를 세션 이름으로 요약해줘.
+
+질의: "${firstQuery.replace(/"/g, '\\"')}"
+
+요구사항:
+- 10~20자 이내 한국어 명사구
+- 명령 꼬리말(보여줘·알려줘·조회해줘·찾아줘·주세요 등) 제거
+- 조사·수식어 최소화, 핵심 주제만
+- 따옴표·설명·마크다운 없이 요약 문자열만 출력`;
+
+  const outputPath: string = path.join(os.tmpdir(), `codex-title-${crypto.randomUUID()}.txt`);
+  const title = await new Promise<string>((resolve, reject) => {
+    const child = spawn(
+      resolveCodexCli(),
+      [
+        'exec',
+        '--skip-git-repo-check',
+        '--ephemeral',
+        '--sandbox', 'read-only',
+        '--output-last-message', outputPath,
+        '--model', CODEX_MODEL,
+        prompt,
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'], env: CODEX_CHILD_ENV, cwd: CLI_WORKDIR },
+    );
+    let err = '';
+    child.stderr!.on('data', (d: Buffer) => { err += d.toString(); });
+    child.on('close', (code) => {
+      const out = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf-8') : '';
+      try { fs.unlinkSync(outputPath); } catch { /* 무시 */ }
+      if (code === 0) resolve(out.trim());
+      else reject(new Error(`codex exit ${code}: ${err.slice(0, 200)}`));
+    });
+    child.on('error', reject);
+  });
+
+  const cleaned = title
+    .replace(/^["'`]|["'`]$/g, '')
+    .replace(/^\s*[-•*]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned || cleaned.length > 40) return;
+  historyDb.renameSession(sessionId, cleaned);
+  console.log(`${ts()} [세션명 요약]  ${sessionId} → ${cleaned}`);
+}
+
 app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
   const { message, requestId, limit = 20, sessionId } = req.body;
 
@@ -840,11 +894,27 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
+  // 라이브와 복원이 토씨 하나 안 틀리게 보이도록 모든 SSE 이벤트를 재생용으로 수집.
+  // result-data 의 data 는 attachments.data 로 대체 복원 → 로그에는 데이터 중복 피해 메타만 저장.
+  const progressLog: Array<{ type: SseEventType; time: string; message?: string; data?: unknown }> = [];
+  const nowHMS = (): string => new Date().toTimeString().slice(0, 8);
+  const REPLAYABLE: ReadonlySet<SseEventType> = new Set(['progress', 'log', 'query', 'result-data', 'result', 'error', 'cancelled']);
+
   const send: SendFn = (type: SseEventType, msg: unknown): void => {
     const payload = typeof msg === 'string'
       ? { type, message: msg }
       : { type, data: msg };
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    if (REPLAYABLE.has(type)) {
+      const time = nowHMS();
+      if (type === 'result-data') {
+        progressLog.push({ type, time });
+      } else if (typeof msg === 'string') {
+        progressLog.push({ type, time, message: msg });
+      } else {
+        progressLog.push({ type, time, data: msg });
+      }
+    }
   };
 
   console.log(`\n${'─'.repeat(60)}`);
@@ -964,7 +1034,7 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
         }
         send('result-data', body as unknown as ResultDataEventPayload);
         send('progress', `DB 응답 완료 — ${body.count}건 / ${(body.dbTimeMs / 1000).toFixed(2)}초`);
-        assistantAttachments = { columns: body.columns, rowCount: body.count };
+        assistantAttachments = { columns: body.columns, rowCount: body.count, data: body.data, progressLog };
         dataForPromotion = body.data;
       } else {
         if (!parsed.collection) throw new Error('collection 필드 누락');
@@ -983,7 +1053,7 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
         }
         send('result-data', body as unknown as ResultDataEventPayload);
         send('progress', `DB 응답 완료 — ${body.count}건 / ${(body.dbTimeMs / 1000).toFixed(2)}초`);
-        assistantAttachments = { columns: body.columns, rowCount: body.count };
+        assistantAttachments = { columns: body.columns, rowCount: body.count, data: body.data, progressLog };
         dataForPromotion = body.data;
       }
       send('result', '');
@@ -999,6 +1069,13 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
             attachments: assistantAttachments,
           });
           send('assistant-saved', { messageId: assistantMessageId });
+
+          // 첫 턴 완료 (user + assistant = 2) 시 LLM 요약으로 세션명 자동 설정 — 백그라운드.
+          if (historyDb.listMessages(sessionId).length === 2) {
+            summarizeAndRenameSession(sessionId, message.trim()).catch((err) => {
+              console.error('[title summary] 실패:', err);
+            });
+          }
 
           const dataByteSize = dataForPromotion && dataForPromotion.length > 0
             ? Buffer.byteLength(JSON.stringify(dataForPromotion))

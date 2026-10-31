@@ -374,6 +374,26 @@ app.get('/meta/table-info', (_req: Request, res: Response) => {
   res.json({ content: loadTableIndex() });
 });
 
+app.get('/meta/table/:name', (req: Request<{ name: string }>, res: Response) => {
+  const name = req.params.name;
+  // path traversal 차단: 영문·숫자·언더스코어·하이픈만 허용
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    return res.status(400).json({ error: 'invalid name' });
+  }
+  const filePath = path.join(TABLES_DIR, `${name}.md`);
+  // TABLES_DIR 하위 containment 재검증
+  const resolved = path.resolve(filePath);
+  if (!resolved.startsWith(path.resolve(TABLES_DIR) + path.sep)) {
+    return res.status(400).json({ error: 'path escape blocked' });
+  }
+  try {
+    const content = fs.readFileSync(resolved, 'utf-8');
+    res.json({ content });
+  } catch {
+    res.status(404).json({ error: 'not found' });
+  }
+});
+
 app.get('/meta/erd', (_req: Request, res: Response) => {
   const erdPath: string = path.resolve('erd.mmd');
   if (!fs.existsSync(erdPath)) {

@@ -355,6 +355,10 @@
 
     .modal-body tr:nth-child(even) td { background: #1a1f35; }
 
+    /* 테이블 목록 행 호버 (드릴다운 가능 시각 힌트) */
+    #modal-content tbody tr { cursor: pointer; transition: background 0.1s; }
+    #modal-content tbody tr:hover td { background: #1a3a5a !important; }
+
     .modal-body code {
       background: #0f1a2e;
       padding: 1px 5px;
@@ -819,6 +823,19 @@
         <input type="text" id="modal-search-input" placeholder="컬렉션명 또는 설명으로 검색...">
       </div>
       <div class="modal-body" id="modal-content"></div>
+    </div>
+  </div>
+
+  <div id="table-detail-modal" class="modal-overlay" style="display:none; z-index: 1100;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <button class="modal-close" id="table-detail-back" title="목록으로">←</button>
+          <span id="table-detail-title">테이블 상세</span>
+        </div>
+        <button class="modal-close" id="table-detail-close" title="전체 닫기">✕</button>
+      </div>
+      <div class="modal-body" id="table-detail-body"></div>
     </div>
   </div>
 
@@ -1321,6 +1338,45 @@
     });
 
     modalSearchInput.addEventListener('input', (e) => filterModalRows(e.target.value));
+
+    // 테이블 상세 모달 (드릴다운)
+    const tableDetailModal = document.getElementById('table-detail-modal');
+    const tableDetailBody = document.getElementById('table-detail-body');
+    const tableDetailTitle = document.getElementById('table-detail-title');
+
+    async function openTableDetail(name) {
+      try {
+        const res = await fetch(`/meta/table/${encodeURIComponent(name)}`);
+        const json = await res.json();
+        if (!res.ok) { alert(json.error || '테이블 정보를 가져올 수 없습니다'); return; }
+        tableDetailTitle.textContent = name;
+        tableDetailBody.innerHTML = marked.parse(json.content);
+        tableDetailBody.scrollTop = 0;
+        tableDetailModal.style.display = 'flex';
+      } catch {
+        alert('테이블 정보를 가져올 수 없습니다');
+      }
+    }
+
+    modalContent.addEventListener('click', (e) => {
+      const row = e.target.closest('tbody tr');
+      if (!row || row.style.display === 'none') return;
+      const firstCell = row.querySelector('td');
+      if (!firstCell) return;
+      const name = (firstCell.querySelector('code') || firstCell).textContent.trim();
+      if (name) openTableDetail(name);
+    });
+
+    document.getElementById('table-detail-back').addEventListener('click', () => {
+      tableDetailModal.style.display = 'none';
+    });
+    document.getElementById('table-detail-close').addEventListener('click', () => {
+      tableDetailModal.style.display = 'none';
+      tableModal.style.display = 'none';
+    });
+    tableDetailModal.addEventListener('click', (e) => {
+      if (e.target === tableDetailModal) tableDetailModal.style.display = 'none';
+    });
 
     // ── ERD 모달 ─────────────────────────────────────────────────────────────
     const erdBtn = document.getElementById('erd-btn');

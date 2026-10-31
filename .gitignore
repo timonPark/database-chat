@@ -4,3 +4,4 @@ dist/
 .env
 **/.env
 work_history/
+templates/**/pnpm-lock.yaml

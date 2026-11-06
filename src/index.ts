@@ -12,6 +12,34 @@ const TEMPLATES_DIR = path.join(__dirname, '..', 'templates');
 const DOCKER_DIR   = path.join(__dirname, '..', 'docker');
 const SEEDS_DIR    = path.join(__dirname, '..', 'seeds');
 
+/**
+ * 템플릿 package.json 의 engines.node 하한을 읽는다 (">=X[.Y[.Z]]" 형태만 지원).
+ * engines 가 없거나 다른 형태면 null → 검사를 건너뛴다.
+ */
+function readTemplateNodeFloor(templateDir: string): string | null {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(templateDir, 'package.json'), 'utf8')) as {
+      engines?: { node?: string };
+    };
+    const m = /^>=\s*(\d+(?:\.\d+){0,2})$/.exec(pkg.engines?.node ?? '');
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 하한 이상이면 true. current/floor 모두 "X.Y.Z" (빠진 자리는 0). */
+function nodeSatisfiesFloor(current: string, floor: string): boolean {
+  const a = current.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const b = floor.split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
 const IS_WINDOWS = process.platform === 'win32';
 // 안내 문구용 .env 복사 명령 — `copy` 는 cmd.exe·PowerShell 양쪽에서 동작
 const ENV_COPY_CMD = IS_WINDOWS ? 'copy .env.example .env' : 'cp .env.example .env';
@@ -2134,12 +2162,28 @@ async function main(): Promise<void> {
     }
   }
 
+  // Node 버전 사전 검사 — 템플릿이 요구하는 하한(engines.node) 미만이면 생성 전에 중단한다.
+  // 상한은 두지 않는다 (네이티브 의존성이 없어 새 Node 에서도 동작해야 함).
+  const nodeFloor = readTemplateNodeFloor(templateDir);
+  if (nodeFloor && !nodeSatisfiesFloor(process.version, nodeFloor)) {
+    console.error(pc.red(`오류: 이 템플릿(${combo})은 Node.js ${nodeFloor} 이상이 필요합니다. (현재: ${process.version})`));
+    console.error(pc.dim('  채팅 히스토리가 Node 내장 SQLite(node:sqlite)를 사용하기 때문입니다.'));
+    console.error(pc.dim(`  Node.js 를 ${nodeFloor} 이상으로 올린 뒤 다시 실행하세요. 프로젝트는 생성하지 않았습니다.`));
+    process.exit(1);
+  }
+
   const spinner = p.spinner();
 
   // 파일 복사
   spinner.start('Copying template files...');
   await mkdir(targetDir, { recursive: true });
-  await cp(templateDir, targetDir, { recursive: true });
+  // node_modules 는 복사하지 않는다: 템플릿 폴더에서 직접 설치한 흔적(pnpm 심볼릭 링크 등)이 있으면
+  // cp 가 EINVAL 로 죽거나 의존성 설치가 "이미 됨" 으로 오판된다. 배포본(npm pack)에는 원래 없다.
+  await cp(templateDir, targetDir, {
+    recursive: true,
+    // 템플릿 폴더 기준 상대 경로로만 검사 (npx 로 설치된 경로 자체에 node_modules 가 들어 있다)
+    filter: (srcPath) => !path.relative(templateDir, srcPath).split(path.sep).includes('node_modules'),
+  });
 
   // _gitignore → .gitignore (git이 template 내 .gitignore를 무시하는 문제 회피)
   const gitignoreSrc = path.join(targetDir, '_gitignore');
@@ -2205,20 +2249,54 @@ async function main(): Promise<void> {
     yarn: 'yarn',
   };
   spinner.start(`Installing dependencies via ${pm}...`);
-  try {
-    execSync(installCmd[pm], { cwd: targetDir, stdio: 'ignore' });
+  // 출력은 캡처해서 실패 시 핵심 오류와 로그 파일 위치를 보여준다 (이전엔 stdio:'ignore' 로 원인이 사라졌음).
+  const installRes = spawnSync(installCmd[pm], {
+    cwd: targetDir,
+    shell: true,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const installOk = installRes.status === 0 && !installRes.error;
+  let installLogPath: string | null = null;
+  if (installOk) {
     spinner.stop('Dependencies installed.');
-  } catch {
-    spinner.stop(pc.yellow('⚠  Dependency install failed. Run it manually.'));
+  } else {
+    spinner.stop(pc.red('✖  Dependency install failed.'));
+    const output = `${installRes.stdout ?? ''}\n${installRes.stderr ?? ''}${installRes.error ? `\n${installRes.error.message}` : ''}`;
+    installLogPath = path.join(targetDir, 'install-error.log');
+    try {
+      writeFileSync(installLogPath, `$ ${installCmd[pm]}  (node ${process.version}, ${process.platform}/${process.arch})\n\n${output}`);
+    } catch {
+      installLogPath = null;
+    }
+    const keyLines = output
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => /\berror\b|ERR!|failed|not found/i.test(l))
+      .slice(-5);
+    console.log('');
+    console.log(pc.dim(`  환경: Node ${process.version} · ${process.platform}/${process.arch} · ${pm}`));
+    if (keyLines.length > 0) {
+      console.log(pc.dim('  핵심 오류:'));
+      for (const l of keyLines) console.log(pc.dim(`    ${l}`));
+    }
+    if (installLogPath) console.log(pc.dim(`  전체 로그: ${installLogPath}`));
+    console.log('');
   }
 
   // ── 완료 메시지 ────────────────────────────────────────────────────────────
 
-  p.outro(pc.green(`✔  Project ${pc.bold(projectName)} is ready!`));
+  if (installOk) {
+    p.outro(pc.green(`✔  Project ${pc.bold(projectName)} is ready!`));
+  } else {
+    // 의존성이 없으면 서버를 띄울 수 없다 — "ready" 로 표시하지 않는다.
+    p.outro(pc.yellow(`⚠  Project ${pc.bold(projectName)} files were created, but dependencies are NOT installed — not ready to run.`));
+  }
 
   // cd 명령은 LLM이 이미 targetDir에서 실행하므로 자동 실행 프롬프트에선 제외
   const cdCmd = path.resolve('.') !== targetDir ? `cd ${projectName}` : null;
   const setupSteps: string[] = [
+    ...(installOk ? [] : [`${installCmd[pm]}   # 의존성 설치 실패 — 원인 해결 후 먼저 실행`]),
     ...(dbMode === 'docker'
       ? ['docker compose -f docker/docker-compose.yml up -d']
       : []),
@@ -2248,6 +2326,13 @@ async function main(): Promise<void> {
     console.log(pc.dim('    .claude/settings.local.json (permissions.deny) · 자식 프로세스 env 필터'));
     console.log(pc.dim('    · 파일 권한(0600) 3중으로 차단됩니다.'));
     console.log('');
+  }
+
+  // 의존성 설치가 실패했으면 자동 실행(서버 기동까지 포함)을 제안하지 않고 여기서 끝낸다.
+  if (!installOk) {
+    console.log(pc.yellow('  의존성 설치가 끝나지 않아 자동 실행을 건너뜁니다. 위 Next steps 의 첫 단계부터 진행하세요.'));
+    console.log('');
+    return;
   }
 
   // Auto-setup 여부 확인

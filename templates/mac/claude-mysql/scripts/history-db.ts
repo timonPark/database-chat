@@ -1,10 +1,28 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import * as XLSX from 'xlsx';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 
-type DbHandle = InstanceType<typeof Database>;
+type DbHandle = DatabaseSync;
+
+// node:sqlite 에는 better-sqlite3 의 db.transaction() 이 없어 직접 만든다.
+// fn 이 throw 하면 ROLLBACK 후 그대로 다시 throw.
+function transaction<A extends unknown[]>(
+  db: DbHandle,
+  fn: (...args: A) => void,
+): (...args: A) => void {
+  return (...args: A): void => {
+    db.exec('BEGIN');
+    try {
+      fn(...args);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  };
+}
 
 const SCHEMA_VERSION = 1;
 const SIZE_CAP_BYTES = 10 * 1024 * 1024;
@@ -230,9 +248,9 @@ export function openHistoryDb(projectRoot: string): HistoryDb {
 
   mkdirSync(dataDir, { recursive: true });
 
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  const db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
 
   runMigrations(db);
 
@@ -298,7 +316,8 @@ export function openHistoryDb(projectRoot: string): HistoryDb {
     deleteExportByPath: db.prepare('DELETE FROM exports WHERE file_path = ?'),
   };
 
-  const insertMessageTx = db.transaction(
+  const insertMessageTx = transaction(
+    db,
     (id: string, sessionId: string, msg: MessageInput, t: number) => {
       const attachmentsJson =
         msg.attachments == null ? null : JSON.stringify(msg.attachments);
@@ -315,7 +334,7 @@ export function openHistoryDb(projectRoot: string): HistoryDb {
     },
   );
 
-  const insertExportTx = db.transaction((id: string, exp: ExportInput, t: number) => {
+  const insertExportTx = transaction(db, (id: string, exp: ExportInput, t: number) => {
     stmts.insertExport.run(
       id,
       exp.sessionId,
@@ -330,7 +349,7 @@ export function openHistoryDb(projectRoot: string): HistoryDb {
     stmts.bumpSessionUpdatedAt.run(t, exp.sessionId);
   });
 
-  const deleteExportPathsTx = db.transaction((paths: string[]) => {
+  const deleteExportPathsTx = transaction(db, (paths: string[]) => {
     for (const p of paths) stmts.deleteExportByPath.run(p);
   });
 
@@ -443,7 +462,7 @@ export function openHistoryDb(projectRoot: string): HistoryDb {
     },
 
     listSessions() {
-      return stmts.listSessions.all() as SessionRow[];
+      return stmts.listSessions.all() as unknown as SessionRow[];
     },
 
     renameSession(id, title) {
@@ -501,7 +520,7 @@ export function openHistoryDb(projectRoot: string): HistoryDb {
 
     listExports(sessionId) {
       assertUuid(sessionId, 'sessionId');
-      return stmts.listExports.all(sessionId) as ExportRow[];
+      return stmts.listExports.all(sessionId) as unknown as ExportRow[];
     },
 
     getExport(id) {

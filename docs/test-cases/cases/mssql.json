@@ -66,6 +66,10 @@
     { "id": "D-13", "category": "CTE", "cte": true, "sql": "WITH cat AS (SELECT ProductCategoryID, Name FROM SalesLT.ProductCategory) SELECT TOP 5 p.Name, p.ListPrice FROM SalesLT.Product p JOIN cat ON cat.ProductCategoryID = p.ProductCategoryID",
       "expect": { "confidence": "full", "allFrom": "SalesLT.Product" } },
     { "id": "D-14", "category": "민감 컬럼", "sql": "SELECT TOP 5 * FROM SalesLT.Customer",
-      "expect": { "confidence": "full", "allFrom": "SalesLT.Customer", "absentKeys": ["PasswordHash", "PasswordSalt"] } }
+      "expect": { "confidence": "full", "allFrom": "SalesLT.Customer", "absentKeys": ["PasswordHash", "PasswordSalt"] } },
+    { "id": "D-15", "category": "동명 컬럼 중복 (다른 테이블)", "sql": "SELECT TOP 5 p.Name, c.Name FROM SalesLT.Product p JOIN SalesLT.ProductCategory c ON c.ProductCategoryID = p.ProductCategoryID",
+      "expect": { "confidence": "full", "keys": ["Name", "Name_1"], "sources": { "Name": "SalesLT.Product", "Name_1": "SalesLT.ProductCategory" } } },
+    { "id": "D-16", "category": "동명 컬럼 중복 (셀프 조인)", "sql": "SELECT TOP 5 c.Name, pc.Name FROM SalesLT.ProductCategory c JOIN SalesLT.ProductCategory pc ON pc.ProductCategoryID = c.ParentProductCategoryID",
+      "expect": { "confidence": "full", "allFrom": "SalesLT.ProductCategory", "keys": ["Name", "Name_1"] } }
   ]
 }

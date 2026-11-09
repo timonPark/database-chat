@@ -44,3 +44,5 @@
 | D-12 | 결과 0건 헤더 | `SELECT Name, ListPrice FROM SalesLT.Product WHERE 1 = 0` | `full` · 전 컬럼 source=SalesLT.Product · 헤더 [Name, ListPrice] · 0건 |
 | D-13 | CTE | `WITH cat AS (SELECT ProductCategoryID, Name FROM SalesLT.ProductCategory) SELECT TOP 5 p.Name, p.ListPrice FROM SalesLT.Product p JOIN cat ON cat.ProductCategoryID = p.ProductCategoryID` | `full` · 전 컬럼 source=SalesLT.Product · WITH 미허용 템플릿은 400 거부가 기대 결과 |
 | D-14 | 민감 컬럼 | `SELECT TOP 5 * FROM SalesLT.Customer` | `full` · 전 컬럼 source=SalesLT.Customer · PasswordHash, PasswordSalt 미노출 |
+| D-15 | 동명 컬럼 중복 (다른 테이블) | `SELECT TOP 5 p.Name, c.Name FROM SalesLT.Product p JOIN SalesLT.ProductCategory c ON c.ProductCategoryID = p.ProductCategoryID` | `full` · Name→SalesLT.Product, Name_1→SalesLT.ProductCategory · 헤더 [Name, Name_1] |
+| D-16 | 동명 컬럼 중복 (셀프 조인) | `SELECT TOP 5 c.Name, pc.Name FROM SalesLT.ProductCategory c JOIN SalesLT.ProductCategory pc ON pc.ProductCategoryID = c.ParentProductCategoryID` | `full` · 전 컬럼 source=SalesLT.ProductCategory · 헤더 [Name, Name_1] |

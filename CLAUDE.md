@@ -96,6 +96,14 @@
 - 커밋 전에 `git config user.email`이 `m05214@naver.com`인지 확인한다. 다르면 멈추고 저장소 로컬 설정(`git config user.email m05214@naver.com`)을 고친 뒤 커밋한다. 전역 설정은 건드리지 않는다.
 - 이 저장소의 GitHub 작업(이슈, push, PR, 머지 등)은 `timonPark` 계정으로 한다. `ParkJH0514`는 쓰지 않는다.
 - 활성 `gh` 계정이 `ParkJH0514`일 수 있다. 활성 계정을 바꾸지 말고, 명령 한 번에만 `GH_TOKEN=$(gh auth token --user timonPark) gh ...`로 `timonPark` 자격 증명을 쓴다. `git push`도 같은 계정으로 인증되는지 확인한다.
+- `git push`는 `gh`의 활성 계정을 따라갈 수 있으므로, push할 때는 명령 한 번에만 `timonPark` 토큰을 자격 증명으로 지정한다. 활성 `gh` 계정과 전역 git 설정은 바꾸지 않는다.
+
+  ```bash
+  T=$(gh auth token --user timonPark)
+  git -c credential.helper= -c "credential.helper=!f() { echo username=timonPark; echo password=$T; }; f" push -u origin <브랜치명>
+  ```
+
+  토큰은 이 명령 안에서만 쓰고 출력·파일·커밋에 남기지 않는다.
 
 ### 소통
 

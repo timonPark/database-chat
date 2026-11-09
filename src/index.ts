@@ -2248,6 +2248,11 @@ async function main(): Promise<void> {
     pnpm: 'pnpm install',
     yarn: 'yarn',
   };
+  // pnpm 은 의존성(esbuild 등)의 빌드 스크립트를 승인 없이 막고 ERR_PNPM_IGNORED_BUILDS 로 종료한다.
+  // package.json 의 pnpm.onlyBuiltDependencies 는 pnpm 12 에서 더 이상 읽지 않으므로 pnpm-workspace.yaml 로 허용한다.
+  if (pm === 'pnpm') {
+    writeFileSync(path.join(targetDir, 'pnpm-workspace.yaml'), 'allowBuilds:\n  esbuild: true\n');
+  }
   spinner.start(`Installing dependencies via ${pm}...`);
   // 출력은 캡처해서 실패 시 핵심 오류와 로그 파일 위치를 보여준다 (이전엔 stdio:'ignore' 로 원인이 사라졌음).
   const installRes = spawnSync(installCmd[pm], {

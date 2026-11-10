@@ -279,6 +279,25 @@ function removeSensitiveColumns(data: Record<string, unknown>[]): Record<string,
 
 let pool: sql.ConnectionPool;
 
+// mssql 드라이버는 결과 컬럼명이 겹치면 (별칭 없는 `p.Name, c.Name`) key 하나에 값 배열로 합친다.
+// arrayRowMode 로 받아 두 번째부터 `<이름>_1`, `<이름>_2` … 로 key 를 나눈다
+// (node-oracledb 와 같은 규칙 — build-columns 의 resolveDuplicate 가 n+1 번째 SELECT 항목으로 매칭)
+async function queryRecords(sqlText: string): Promise<Record<string, unknown>[]> {
+  const request = pool.request();
+  request.arrayRowMode = true;
+  const result = await request.query(sqlText);
+  // arrayRowMode 에서만 채워지는 result.columns 는 @types/mssql 에 없다
+  const meta: { name: string }[] = (result as unknown as { columns?: { name: string }[][] }).columns?.[0] ?? [];
+  const used = new Set<string>();
+  const keys: string[] = meta.map(({ name }) => {
+    let key = name;
+    for (let n = 1; used.has(key); n++) key = `${name}_${n}`;
+    used.add(key);
+    return key;
+  });
+  return ((result.recordset ?? []) as unknown[][]).map((row) => Object.fromEntries(keys.map((key, i) => [key, row[i]])));
+}
+
 // ── 내부 실행 함수 ──────────────────────────────────────────────────────────
 
 interface SqlResultBody {
@@ -298,11 +317,9 @@ async function executeSqlInternal(rawSql: string): Promise<{ body: SqlResultBody
   const table: string = analysis.baseTable ?? 'result';
 
   const dbStart: number = Date.now();
-  const request = pool.request();
-  const result = await request.query(effectiveSql);
+  const rawData: Record<string, unknown>[] = await queryRecords(effectiveSql);
   const dbTimeMs: number = Date.now() - dbStart;
 
-  const rawData: Record<string, unknown>[] = (result.recordset ?? []) as Record<string, unknown>[];
   const data: Record<string, unknown>[] = removeSensitiveColumns(rawData);
   const cols = buildColumnsFromSql(data, analysis);
 
@@ -445,9 +462,7 @@ app.post('/db-export', async (req: Request<object, object, DbExportBody>, res: R
   if (!stored) return res.status(404).json({ error: '조회 파라미터를 찾을 수 없습니다. 먼저 검색을 실행해 주세요.' });
 
   try {
-    const request = pool.request();
-    const result = await request.query(stored.sql);
-    const rawData: Record<string, unknown>[] = (result.recordset ?? []) as Record<string, unknown>[];
+    const rawData: Record<string, unknown>[] = await queryRecords(stored.sql);
     const data: Record<string, unknown>[] = removeSensitiveColumns(rawData);
     console.log(`${ts()} [엑셀 내보내기] ${stored.table} ${data.length}건`);
 

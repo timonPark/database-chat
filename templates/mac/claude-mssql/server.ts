@@ -169,14 +169,14 @@ function buildTableGuide(): string {
 // 요청마다 읽고 (파일 수정이 재시작 없이 반영), 파일이 없거나 비어 있으면 섹션을 생략한다.
 let definitionsOverflowWarnedLength: number = 0;
 
-function buildBusinessDefinitions(): string {
+// LLM 이 볼 수 있는 정의 원문 (상한 적용). 없거나 비어 있으면 ''.
+function readDefinitions(): string {
   let content: string;
   try {
     content = fs.readFileSync(path.resolve(DEFINITIONS_FILE), 'utf-8').trim();
   } catch {
     return '';
   }
-  if (!content) return '';
   if (content.length > DEFINITIONS_MAX_CHARS) {
     if (content.length !== definitionsOverflowWarnedLength) {
       console.warn(`${DEFINITIONS_FILE} 가 ${content.length}자로 상한 ${DEFINITIONS_MAX_CHARS}자를 넘어 앞부분만 사용합니다`);
@@ -184,7 +184,23 @@ function buildBusinessDefinitions(): string {
     }
     content = content.slice(0, DEFINITIONS_MAX_CHARS);
   }
-  return `\n[비즈니스 정의: 사용자가 정한 지표 계산식·용어 의미. 지표는 이 계산식을 그대로 따르고, [테이블 선택 가이드] 와 충돌하면 이쪽이 우선]\n${content}\n`;
+  return content;
+}
+
+// 정의 이름 = `###` 헤딩 텍스트 (ADR 0004). LLM 이 보고한 applied 이름을 이 목록과 대조해 걸러낸다.
+function listDefinitionNames(): Set<string> {
+  const names = new Set<string>();
+  for (const line of readDefinitions().split('\n')) {
+    const m = line.match(/^###\s+(.+?)\s*$/);
+    if (m) names.add(m[1]);
+  }
+  return names;
+}
+
+function buildBusinessDefinitions(): string {
+  const content = readDefinitions();
+  if (!content) return '';
+  return `\n[비즈니스 정의: 사용자가 정한 지표 계산식·용어 의미. 지표는 이 계산식을 그대로 따르고, [테이블 선택 가이드] 와 충돌하면 이쪽이 우선. 질문이 정의의 이름·동의어를 쓰거나 SQL 이 정의의 계산식·매핑을 따랐다면 sql JSON 에 "applied":["정의 이름"] 을 추가하고 (이름은 ### 헤딩 텍스트 그대로), 해당하는 정의가 없으면 applied 를 생략]\n${content}\n`;
 }
 
 function buildSystemPrompt(limit: number = 20): string {
@@ -358,6 +374,7 @@ interface LlmSqlPayload {
   kind: 'sql';
   sql?: string;
   limit?: number;
+  applied?: unknown;
 }
 
 function isLlmSqlPayload(v: unknown): v is LlmSqlPayload {
@@ -759,6 +776,15 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
       console.log(`${'─'.repeat(60)}\n`);
       return;
     }
+
+    // LLM 이 보고한 applied 중 정의 파일의 ### 헤딩과 일치하는 이름만 남긴다 (지어낸 이름 제거).
+    // query 이벤트 · log · generated_query 모두 걸러진 parsed 를 쓰므로 UI 표시와 복원이 같은 값을 본다.
+    const definitionNames: Set<string> = listDefinitionNames();
+    const applied: string[] = Array.isArray(parsed.applied)
+      ? [...new Set(parsed.applied.filter((n): n is string => typeof n === 'string').map((n) => n.trim()).filter((n) => definitionNames.has(n)))]
+      : [];
+    if (applied.length > 0) parsed.applied = applied;
+    else delete parsed.applied;
 
     send('query', { endpoint: '/db-query', requestBody: parsed as unknown as Record<string, unknown> } satisfies QueryEventPayload);
     send('log', JSON.stringify(parsed));

@@ -1899,7 +1899,6 @@
                 const d1 = document.createElement('hr'); d1.className = 'result-divider'; bubble.appendChild(d1);
                 const r1 = document.createElement('div'); r1.className = 'result-text'; bubble.appendChild(r1);
                 assistantTime.textContent = nowHMS();
-                const capturedRequestId = currentRequestId;
                 const truncated = resultText.length > 3000;
                 const displayText = truncated ? resultText.slice(0, 3000) + '\n...' : resultText;
                 await typewriter(r1, displayText);
@@ -1909,7 +1908,8 @@
                   notice.innerHTML = `${SVG_DOWNLOAD} 결과가 길어 일부만 표시됩니다. 전체 내용은 아래 엑셀 다운로드를 이용해주세요.`;
                   bubble.appendChild(notice);
                 }
-                addResultActions(bubble, resultText, capturedRequestId);
+                // result-data 없이 텍스트만 온 응답 (되묻기 등) — 내보낼 결과가 없으므로 엑셀 버튼 없음
+                addResultActions(bubble, resultText, null);
               } else if (event.type === 'cancelled') {
                 if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
                 const d2 = document.createElement('hr'); d2.className = 'result-divider'; bubble.appendChild(d2);

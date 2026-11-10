@@ -27,3 +27,19 @@ _Avoid_: Prompt, User input, Request (모호함)
 **Generated Query**:
 LLM 이 Natural Language Query 로부터 생성한 **실행 가능한 DB 쿼리**. SQL 또는 MongoDB aggregate pipeline. `messages.generated_query` 컬럼에 저장되며 LLM 세션 메모리 재주입 시 사용됩니다. 서버가 이걸 받아 실행 → Attachment 생성.
 _Avoid_: Query (단독 사용 금지), SQL (MongoDB 포함 못함), DSL
+
+**Schema Index**:
+DB 스키마를 LLM 이 읽을 수 있게 정리한 **자동 생성 문서 묶음** — 테이블(컬렉션) 목록, 자연어 키워드 매핑, 테이블별 컬럼 명세. 스키마 추출 단계에서 LLM 이 만들고, 다시 생성하면 덮어쓰입니다. 사람이 소유하는 Business Definition 과 다릅니다.
+_Avoid_: Catalog, Metadata, Schema file
+
+**Business Definition**:
+사용자가 직접 적는, 이 DB 에서 업무 용어나 지표가 **무엇을 뜻하는지**에 대한 기준. LLM 이 Natural Language Query 를 Generated Query 로 바꿀 때 Schema Index 와 함께 참조하며, 사람이 소유하므로 Schema Index 를 다시 생성해도 덮어쓰이지 않습니다. **Metric** 과 **Business Term** 두 종류가 있습니다.
+_Avoid_: Ontology, Semantic layer, Dictionary, Rule
+
+**Metric**:
+**계산식이 있는** Business Definition. 예: "매출 = 취소 주문을 제외한 주문 상세 `LineTotal` 의 합계".
+_Avoid_: KPI, Measure, SQL attribute, Formula
+
+**Business Term**:
+업무에서 쓰는 말과 동의어를 **특정 테이블·컬럼에 연결**하는 Business Definition. Schema Index 의 자연어 키워드 (테이블 단위, 자동 생성) 와 달리 컬럼·업무 의미 수준이며 사람이 작성합니다.
+_Avoid_: Keyword, Concept, Entity, Synonym

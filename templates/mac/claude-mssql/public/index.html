@@ -531,6 +531,12 @@
       border-color: #5a4a2a;
     }
 
+    .badge.applied {
+      background: #14342f;
+      color: #7fe0cc;
+      border-color: #2a6a5e;
+    }
+
     .empty-card {
       padding: 16px 18px;
       background: #1a2a3a;
@@ -1162,10 +1168,17 @@
       }
     }
 
+    // 서버가 정의 파일의 ### 헤딩과 대조해 걸러 보낸 applied (query 이벤트의 requestBody) 를 꺼낸다. live · 복원 공용.
+    // 결과 표 위 배지는 renderResultData 가 그린다.
+    function appliedFromQuery(requestBody) {
+      return requestBody && Array.isArray(requestBody.applied) ? requestBody.applied : [];
+    }
+
     // 복원 재생: live 때 쌓이던 progress-step · progress-log · result-divider · result-data · result-text 를 순서대로 재구성.
     // live 와 달리 타이프라이터 애니메이션 없이 즉시 렌더. 모든 progress-step 은 완료 상태(✓)로 표시.
     function replayProgressLog(bubble, log, att) {
       let resultRendered = false;
+      let appliedNames = [];
       for (const entry of log) {
         if (entry.type === 'progress') {
           const step = document.createElement('div');
@@ -1193,7 +1206,7 @@
               data: att.data,
               columns: att.columns ?? [],
               dbTimeMs: att.dbTimeMs ?? 0,
-            }, null);
+            }, null, appliedNames);
             resultRendered = true;
           }
         } else if (entry.type === 'result') {
@@ -1204,8 +1217,9 @@
         } else if (entry.type === 'cancelled' || entry.type === 'error') {
           const d = document.createElement('hr'); d.className = 'result-divider'; bubble.appendChild(d);
           const r = document.createElement('div'); r.className = 'result-text'; r.textContent = entry.message || ''; bubble.appendChild(r);
+        } else if (entry.type === 'query') {
+          appliedNames = appliedFromQuery(entry.data && entry.data.requestBody);
         }
-        // 'query' 는 live 에서도 추가 렌더 안 함
       }
     }
 
@@ -1601,7 +1615,7 @@
       return cur;
     }
 
-    function renderResultData(bubble, payload, requestId) {
+    function renderResultData(bubble, payload, requestId, appliedNames = []) {
       const divider = document.createElement('hr');
       divider.className = 'result-divider';
       bubble.appendChild(divider);
@@ -1621,6 +1635,13 @@
         t.className = 'badge';
         t.textContent = `DB ${(payload.dbTimeMs / 1000).toFixed(2)}s`;
         badges.appendChild(t);
+      }
+      if (appliedNames.length > 0) {
+        const a = document.createElement('span');
+        a.className = 'badge applied';
+        a.textContent = `📐 정의: ${appliedNames.join(' · ')}`;
+        a.title = '이 쿼리를 만들 때 적용한 비즈니스 정의 (definitions.md)';
+        badges.appendChild(a);
       }
       if (payload.columnConfidence === 'partial') {
         const p = document.createElement('span');
@@ -1813,6 +1834,7 @@
 
       let currentStep = null;
       let resultRendered = false;
+      let appliedNames = [];
 
       function nowHMS() {
         return new Date().toTimeString().slice(0, 8);
@@ -1881,11 +1903,12 @@
                 addLog(event.message);
               } else if (event.type === 'query') {
                 // 구조화된 query 이벤트 — 상세 로그는 이미 별도 'log' 이벤트로 표시됨 (backward compat).
-                // 여기서는 추가 렌더 없음. 필요 시 상단 배지 등 확장.
+                // 적용한 정의는 기억해 두었다가 result-data 의 상단 배지로 표시.
+                appliedNames = appliedFromQuery(event.data && event.data.requestBody);
               } else if (event.type === 'result-data') {
                 if (currentStep) { currentStep.querySelector('.spinner').className = 'spinner'; currentStep.classList.add('done'); }
                 assistantTime.textContent = nowHMS();
-                renderResultData(bubble, event.data, currentRequestId);
+                renderResultData(bubble, event.data, currentRequestId, appliedNames);
                 resultRendered = true;
               } else if (event.type === 'result') {
                 // result-data 로 이미 렌더했거나 LLM 이 아무 텍스트도 안 만들었으면 스킵.

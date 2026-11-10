@@ -195,9 +195,13 @@ function buildSystemPrompt(limit: number = 20): string {
 - 도구 · 명령 실행 없음. curl · bash · cat 등 사용 금지 (도구가 제공되지 않음)
 - 서버가 이 JSON 을 파싱해 DB 를 조회하고 결과를 UI 에 직접 그린다. 너는 결과를 볼 수 없고, 결과를 안내할 필요도 없다
 
-**출력 형식** (하나만):
+**출력 형식** (둘 중 하나만):
 
 {"kind":"sql","sql":"SELECT TOP ${limit} col1, col2 FROM schema.table WHERE ... ORDER BY ..."}
+
+요청한 개념이 [테이블] · [테이블 선택 가이드] · [비즈니스 정의] 어디에도 없어 SQL 을 만들 수 없을 때만 (예: 이 DB 에 없는 데이터):
+
+{"kind":"clarify","message":"무엇이 없는지 알리고, 대신 조회할 수 있는 것을 제안하는 한국어 문장"}
 
 [테이블]
 ${buildTableSummary()}
@@ -213,7 +217,8 @@ ${buildBusinessDefinitions()}
 - LLM 이 TOP 를 안 붙였을 때 서버는 강제 주입하지 않으므로 반드시 프롬프트에서 명시
 - JOIN 시 alias 는 짧게 (t1, t2 등). SELECT 컬럼 라벨링은 서버가 처리
 - 컬럼은 원본 그대로 SELECT. 이름 등 여러 컬럼을 + · CONCAT 로 합친 계산 컬럼을 만들지 말 것 (예: first_name, last_name 을 각각 SELECT — 화면 라벨이 스키마 컬럼에 매칭되어야 함). COUNT · SUM 등 집계는 허용
-- 단순 WHERE · ORDER BY 든 JOIN · GROUP BY · 서브쿼리 · HAVING 이든 동일하게 kind:"sql" 하나로 처리`;
+- 단순 WHERE · ORDER BY 든 JOIN · GROUP BY · 서브쿼리 · HAVING 이든 동일하게 kind:"sql" 하나로 처리
+- 없는 개념을 비슷해 보이는 다른 컬럼으로 대신해 SQL 을 지어내지 말고 kind:"clarify" 로 되물을 것. 단, 스키마에 있는 개념의 질문은 반드시 kind:"sql" 로 답하고 clarify 를 남용하지 말 것`;
 }
 
 // ── SQL 보안 검증 ─────────────────────────────────────────────────────────────
@@ -359,6 +364,17 @@ function isLlmSqlPayload(v: unknown): v is LlmSqlPayload {
   if (v === null || typeof v !== 'object') return false;
   const kind = (v as { kind?: unknown }).kind;
   return kind === 'sql';
+}
+
+// 스키마 · 비즈니스 정의에 없는 개념이라 SQL 을 만들 수 없을 때 LLM 이 사용자에게 되묻는 응답.
+interface LlmClarifyPayload {
+  kind: 'clarify';
+  message?: string;
+}
+
+function isLlmClarifyPayload(v: unknown): v is LlmClarifyPayload {
+  if (v === null || typeof v !== 'object') return false;
+  return (v as { kind?: unknown }).kind === 'clarify';
 }
 
 // ── Claude 이벤트 핸들러 ──────────────────────────────────────────────────────
@@ -701,6 +717,33 @@ app.post('/chat', (req: Request<object, object, ChatBody>, res: Response) => {
     }
 
     const parsed = extractJsonFromText(finalResult);
+    if (isLlmClarifyPayload(parsed)) {
+      const clarifyText: string = parsed.message?.trim() ?? '';
+      if (!clarifyText) {
+        send('error', 'LLM 이 되묻는 문장을 비워서 반환했습니다. 다시 시도해 주세요.');
+      } else {
+        console.log(`${ts()} [되묻기]    ${clarifyText}`);
+        send('result', clarifyText);
+        // Generated Query 도 Attachment 도 없는 text 만의 assistant 메시지로 저장 (복원 시 text 로 렌더).
+        if (sessionId) {
+          try {
+            const assistantMessageId = historyDb.insertMessage(sessionId, { role: 'assistant', text: clarifyText });
+            send('assistant-saved', { messageId: assistantMessageId });
+            if (historyDb.listMessages(sessionId).length === 2) {
+              summarizeAndRenameSession(sessionId, message.trim()).catch((err) => {
+                console.error('[title summary] 실패:', err);
+              });
+            }
+          } catch (e) {
+            console.error('[history-db] assistant 메시지 저장 실패:', e);
+          }
+        }
+      }
+      res.write('data: [DONE]\n\n');
+      res.end();
+      console.log(`${'─'.repeat(60)}\n`);
+      return;
+    }
     if (!isLlmSqlPayload(parsed)) {
       console.error(`[오류] LLM 출력에서 유효한 kind:"sql" JSON 을 찾지 못함. 원문 앞머리: ${finalResult.slice(0, 200)}`);
       send('error', 'LLM 이 쿼리 JSON 을 만들지 못했습니다. 다시 시도해 주세요.');

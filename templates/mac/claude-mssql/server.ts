@@ -21,6 +21,8 @@ const DB_USER_PASSWORD: string | undefined = process.env.DB_USER_PASSWORD;
 const TABLE_MAPPING_FILE: string = process.env.TABLE_MAPPING_FILE ?? './table-mapping.md';
 const CLAUDE_MODEL: string = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5-20251001';
 const TABLE_INDEX_FILE: string = './index.md';
+const DEFINITIONS_FILE: string = './definitions.md';
+const DEFINITIONS_MAX_CHARS: number = 8000;
 const TABLES_DIR: string = path.resolve(import.meta.dirname, 'tables');
 
 // Claude 자식 프로세스에 상속시키지 않을 민감 키
@@ -163,6 +165,28 @@ function buildTableGuide(): string {
   }
 }
 
+// ADR 0004: 사용자 소유 Business Definition 을 원문 그대로 시스템 프롬프트에 넣는다.
+// 요청마다 읽고 (파일 수정이 재시작 없이 반영), 파일이 없거나 비어 있으면 섹션을 생략한다.
+let definitionsOverflowWarnedLength: number = 0;
+
+function buildBusinessDefinitions(): string {
+  let content: string;
+  try {
+    content = fs.readFileSync(path.resolve(DEFINITIONS_FILE), 'utf-8').trim();
+  } catch {
+    return '';
+  }
+  if (!content) return '';
+  if (content.length > DEFINITIONS_MAX_CHARS) {
+    if (content.length !== definitionsOverflowWarnedLength) {
+      console.warn(`${DEFINITIONS_FILE} 가 ${content.length}자로 상한 ${DEFINITIONS_MAX_CHARS}자를 넘어 앞부분만 사용합니다`);
+      definitionsOverflowWarnedLength = content.length;
+    }
+    content = content.slice(0, DEFINITIONS_MAX_CHARS);
+  }
+  return `\n[비즈니스 정의: 사용자가 정한 지표 계산식·용어 의미. 지표는 이 계산식을 그대로 따르고, [테이블 선택 가이드] 와 충돌하면 이쪽이 우선]\n${content}\n`;
+}
+
 function buildSystemPrompt(limit: number = 20): string {
   return `MSSQL 조회 쿼리 생성기. 사용자 자연어 요청 → **정확히 하나의 JSON 객체** 만 출력하고 종료.
 
@@ -180,7 +204,7 @@ ${buildTableSummary()}
 
 [테이블 선택 가이드: 테이블명 | 자연어 키워드 | 주요 컬럼 | 설명]
 ${buildTableGuide()}
-
+${buildBusinessDefinitions()}
 규칙:
 - 이름에 password · passwd · pwd · secret 이 들어간 컬럼 (PasswordHash · PasswordSalt · user_password 등) 은 반드시 SELECT 에서 제외
 - SELECT · EXPLAIN · SHOW · DESCRIBE · DESC 만 허용 (INSERT · UPDATE · DELETE · DROP · ALTER · CREATE · TRUNCATE · REPLACE · MERGE · EXEC · EXECUTE · CALL · GRANT · REVOKE · BULK 절대 금지)
